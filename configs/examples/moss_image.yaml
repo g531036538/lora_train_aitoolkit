@@ -1,0 +1,88 @@
+# MOSS-Image LoRA / ai-toolkit —— 20 张图集示例
+# 训练底模：OpenMOSS-Team/MOSS-Image-Base    出图：OpenMOSS-Team/MOSS-Image-SFT
+#   arch: moss_image              extensions_built_in/diffusion_models/moss_image/moss_image.py:159-160
+#     **不能写 moss_image:base** —— 冒号后会被截断（toolkit/config_modules.py:776-778）
+#   model_kwargs.uncond_skip_layers: [22]   训练 Base 必须显式给（moss_image.py:185-187、src/pipeline.py:20）
+#   model_kwargs.sample_shift: 5.0          src/pipeline.py:17（DEFAULT_SHIFT）
+#   noise_scheduler flowmatch     moss_image.py:202-205
+#   quantize convrot8             toolkit/models/registry.py:59
+#   timestep_type 未写             调研文档没有口径，走默认（config_modules.py:560），不瞎猜
+#   bucket 能被 16 整除           moss_image.py:207-208
+# 采样 30 步 / CFG 3.0 来自 toolkit/models/registry.py:59
+job: extension
+config:
+  name: moss_image-lora-v1
+  process:
+  - type: sd_trainer
+    training_folder: ./output
+    device: cuda:0
+    trigger_word: mychar
+    network:
+      type: lora
+      linear: 32
+      linear_alpha: 32
+    save:
+      dtype: float16
+      save_every: 250
+      max_step_saves_to_keep: 4
+      push_to_hub: false
+    datasets:
+    - folder_path: ./datasets/my_character
+      caption_ext: txt
+      caption_dropout_rate: 0.05
+      shuffle_tokens: false
+      cache_latents_to_disk: true
+      buckets: true
+      resolution:
+      - 512
+      - 768
+      - 1024
+    train:
+      batch_size: 1
+      steps: 2500
+      gradient_accumulation_steps: 1
+      train_unet: true
+      train_text_encoder: false
+      gradient_checkpointing: true
+      optimizer: adamw8bit
+      lr: 0.0001
+      dtype: bf16
+      ema_config:
+        use_ema: true
+        ema_decay: 0.99
+      noise_scheduler: flowmatch
+    sample:
+      sample_every: 250
+      sample_start_step: 0
+      width: 1024
+      height: 1024
+      prompts:
+      - '[trigger], portrait photo, plain background, soft lighting'
+      - '[trigger] walking through a rainy city street at night, neon signs, full
+        body'
+      - portrait photo, plain background, soft lighting
+      neg: ''
+      seed: 42
+      walk_seed: false
+      sampler: flowmatch
+      sample_steps: 30
+      guidance_scale: 3.0
+    logging:
+      log_every: 10
+      use_wandb: false
+      verbose: false
+    model:
+      name_or_path: OpenMOSS-Team/MOSS-Image-Base
+      arch: moss_image
+      dtype: bf16
+      quantize: true
+      qtype: convrot8
+      quantize_te: true
+      qtype_te: convrot8
+      model_kwargs:
+        uncond_skip_layers:
+        - 22
+        sample_shift: 5.0
+meta:
+  name: '[name]'
+  version: '1.0'
