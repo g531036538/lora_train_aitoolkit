@@ -134,14 +134,14 @@ def test_moss_json_bbox_and_layout() -> None:
     assert data["appearance"] == "wearing a red dress"
 
 
-def test_moss_zh_labels() -> None:
+def test_moss_labels_stay_english() -> None:
     out = MossPreciseStyler().render(
         "a red apple", ctx(TargetModel.MOSS, trigger="tok", language="zh")
     )
-    assert out.startswith("对象: tok, a red apple")
-    assert "图内文字: 无" in out
-    assert "外观: 未描述" in out
-    assert "构图: 未描述" in out
+    assert out.startswith("Object: tok, a red apple")
+    assert "In-image text: none" in out
+    assert "Appearance: not described" in out
+    assert "Composition: not described" in out
 
 
 def test_moss_empty_raises() -> None:
