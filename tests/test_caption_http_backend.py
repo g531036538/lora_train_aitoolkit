@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
-import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,17 +24,6 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
         openai_http.ENV_MAX_TOKENS,
     ):
         monkeypatch.delenv(name, raising=False)
-
-
-@pytest.fixture
-def scratch() -> Path:
-    """替代 conftest 的 scratch：本机 mkdtemp 会 chmod 0o700，写不进去。"""
-    root = Path(__file__).resolve().parent.parent / ".scratch" / f"caption-http-{uuid.uuid4().hex}"
-    root.mkdir(parents=True)
-    try:
-        yield root
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
 
 @pytest.fixture
