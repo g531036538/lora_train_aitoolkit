@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
-import uuid
 from pathlib import Path
 
 import pytest
@@ -18,20 +16,6 @@ from loraforge.caption.pipeline import (
 )
 from loraforge.models import DatasetKind, TargetModel
 from loraforge.testing import FakeBackend
-
-
-@pytest.fixture
-def scratch() -> Path:
-    """替代 conftest 的 scratch：本机 mkdtemp 会 chmod 0o700，写不进去。
-
-    名字保持 ``scratch``，所以 conftest 的 ``images`` fixture 会复用这个目录。
-    """
-    root = Path(__file__).resolve().parent.parent / ".scratch" / f"caption-{uuid.uuid4().hex}"
-    root.mkdir(parents=True)
-    try:
-        yield root
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
 
 def ctx(*, target: TargetModel = TargetModel.SDXL, trigger: str = "tok") -> CaptionContext:
