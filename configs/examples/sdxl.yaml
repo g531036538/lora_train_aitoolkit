@@ -74,7 +74,7 @@ config:
     model:
       name_or_path: stabilityai/stable-diffusion-xl-base-1.0
       arch: sdxl
-      dtype: float16
+      dtype: bf16
       vae_dtype: float32
 meta:
   name: '[name]'
