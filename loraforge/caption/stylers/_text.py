@@ -137,6 +137,21 @@ _IDENTITY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:sharp|defined|strong|soft)\s+jawline\b", re.IGNORECASE),
 )
 
+_IDENTITY_CATEGORY_BY_INDEX: tuple[str, ...] = (
+    "age",
+    "hair",
+    "hair",
+    "hair",
+    "eyes",
+    "eyes",
+    "skin",
+    "skin",
+    "face",
+    "face",
+    "face",
+    "face",
+)
+
 _CONNECTOR = r"(?:with|and|having|featuring|of|has|have|had|got)"
 _DANGLING_RE = re.compile(
     rf"(?:\b{_CONNECTOR}\b\s*)+(?:(?:a|an|the)\s*)?$", re.IGNORECASE
@@ -182,6 +197,37 @@ def strip_identity_clauses(clauses: Iterable[str]) -> list[str]:
         cleaned = strip_identity(clause)
         if cleaned:
             out.append(cleaned)
+    return out
+
+
+def identity_hits(text: str) -> list[tuple[str, str]]:
+    """返回文本里命中的身份描述 ``(类别, 原文片段)``，按出现位置排序。
+
+    类别是 ``age`` / ``hair`` / ``eyes`` / ``skin`` / ``face``；
+    重叠的匹配只保留最长的一条，避免 ``long black hair`` 被数两次。
+    """
+    matches: list[tuple[int, int, str, str]] = []
+    for category, pattern in zip(_IDENTITY_CATEGORY_BY_INDEX, _IDENTITY_PATTERNS):
+        for match in pattern.finditer(text):
+            fragment = normalize_space(match.group(0))
+            if fragment:
+                matches.append((match.start(), match.end(), category, fragment))
+
+    matches.sort(key=lambda item: (item[0], -(item[1] - item[0])))
+    selected: list[tuple[int, int, str, str]] = []
+    for start, end, category, fragment in matches:
+        if any(start < other_end and end > other_start for other_start, other_end, _, _ in selected):
+            continue
+        selected.append((start, end, category, fragment))
+
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for _, _, category, fragment in selected:
+        key = (category, fragment.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((category, fragment))
     return out
 
 
@@ -426,6 +472,7 @@ __all__ = [
     "extract_quoted_texts",
     "extract_subject",
     "has_person",
+    "identity_hits",
     "join_sentence",
     "normalize_space",
     "remove_trigger",
