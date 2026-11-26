@@ -9,10 +9,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ui = ["gradio>=5.0"]
+# 界面只用本机已预装的 fastapi/uvicorn/jinja2，不需要真的去装；
+# 列在这里是为了说明界面依赖边界（界面不许引入 gradio 之类的新框架）。
+ui = ["fastapi>=0.110", "uvicorn>=0.29", "jinja2>=3.1", "python-multipart>=0.0.9"]
+# 本机没有 onnxruntime，也没有 pip 可装，这两个 extra 目前不可用，仅记录意图。
 tagger = ["onnxruntime>=1.18", "huggingface-hub>=0.24", "numpy>=1.26"]
 vlm = ["torch>=2.4", "transformers>=4.45", "accelerate>=0.34"]
-api = ["requests>=2.31"]
+# 远程打标后端走 HTTP，用已装好的 httpx，不需要 openai SDK。
+api = ["httpx>=0.27"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
@@ -23,7 +27,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["loraforge*"]
+include = ["loraforge*", "app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

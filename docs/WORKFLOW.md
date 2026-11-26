@@ -141,20 +141,40 @@ python -c "import hashlib,sys;[print(p, len(open(p,'rb').read()), sum(1 for _ in
 - 新增行为有对应测试；配置/参数有出处（源码路径或文档链接）
 - 不写「应该可以」「理论上没问题」——**没跑就是 NOT_RUN，并说明缺什么**
 
-## 8. 本地开发
+## 8. 本机环境事实（先看这条，能省很多弯路）
+
+**装不了任何包。** `python -m pip` 不存在；`python -m ensurepip --user` 因为沙箱拒绝写系统临时目录而失败（`PermissionError: [WinError 5]`）。所以：
+
+- 不要写 `pip install ...`，不要提 `python -m venv`，不要指望 `.[ui]` 能装
+- 不要建议换框架来「解决依赖问题」——依赖就在这里，改不了
+
+Python 是 **3.14.7**，已预装 138 个包。与本项目相关的：
+
+| 有 | 没有 |
+| --- | --- |
+| fastapi 0.136、uvicorn 0.48、jinja2 3.1、python-multipart 0.0.29 | **gradio** |
+| pillow、numpy、opencv-python、scipy | **onnxruntime、transformers、accelerate** |
+| pyyaml、httpx、requests、pydantic、starlette | openai SDK |
+| torch 2.12、torchvision 0.27、safetensors、einops、tqdm | pandas |
+| pytest、huggingface-hub | —— |
+
+两条推论，直接决定方案：
+
+1. **界面用 FastAPI + Jinja2 + 原生 JS**，不是 Gradio。
+2. **本地跑不动 onnx tagger 和 VLM**（缺 onnxruntime / transformers 且装不上）。真正能落地的真实打标后端是**远程 HTTP 后端**（httpx 已装）；本地只跑 `FakeBackend`。
+
+## 8.1 跑测试
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-界面（可选）：
+不需要装任何东西，从仓库根跑即可。测试**不许联网、不许碰 GPU、不许下载模型**。
+
+## 8.2 跑界面
 
 ```bash
-pip install -e ".[ui,dev]"
-python -m app.ui          # http://127.0.0.1:7861
+python -m app      # http://127.0.0.1:7861
 ```
 
 ## 9. 机械闸门

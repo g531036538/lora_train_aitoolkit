@@ -152,6 +152,15 @@ class ExportReport:
 
 ## 6. 界面契约（`app/`）
 
+**技术栈：FastAPI + Jinja2 + 原生 JS，不引入任何需要新装的东西。** 本机没有任何可用的
+pip（`python -m pip` 不存在，`ensurepip` 因沙箱拒写临时目录而失败），所以 gradio 这类
+框架装不上，也不许为了它去改环境。
+
+- 入口：`python -m app` → uvicorn 起在 `127.0.0.1:7861`
+- 静态资源：`app/static/`（CSS/JS 直接写，不用打包工具）
+- 模板：`app/templates/`（Jinja2）
+- 前端只发 HTTP 请求，后端路由层负责调 `loraforge`，业务逻辑一行都不许写在 JS 里
+
 界面只做四件事，每件都调核心库：
 
 1. 选文件夹 → 列出图片缩略图
