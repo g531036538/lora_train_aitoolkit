@@ -204,7 +204,10 @@ def _build_sdxl(proc: dict[str, Any], plan: TrainingPlan) -> None:
     model: dict[str, Any] = {
         "name_or_path": plan.model_path,
         "arch": "sdxl",
-        "dtype": "float16",
+        # 与 train.dtype 保持一致：jobs/process/BaseSDTrainProcess.py:117 会用
+        # train.dtype 覆盖 model.dtype（ModelConfig 见 config_modules.py:655），
+        # 这里写另一个值只会让 yaml 读起来自相矛盾，不改变实际行为。
+        "dtype": "bf16",
         "vae_dtype": "float32",  # docs/models/sdxl.md:233
     }
     if int(plan.vram_gb) <= 16:
