@@ -2,13 +2,14 @@
 # 训练底模：OpenMOSS-Team/MOSS-Image-Base    出图：OpenMOSS-Team/MOSS-Image-SFT
 #   arch: moss_image              extensions_built_in/diffusion_models/moss_image/moss_image.py:159-160
 #     **不能写 moss_image:base** —— 冒号后会被截断（toolkit/config_modules.py:776-778）
-#   model_kwargs.uncond_skip_layers: [22]   训练 Base 必须显式给（moss_image.py:185-187、src/pipeline.py:20）
+#   model_kwargs.uncond_skip_layers: [22]  官方 SLG 推荐值，属推理侧口径（docs/models/moss_image.md:195）
 #   model_kwargs.sample_shift: 5.0          src/pipeline.py:17（DEFAULT_SHIFT）
 #   noise_scheduler flowmatch     moss_image.py:202-205
+#   vae_dtype float32             docs/models/moss_image.md:264（官方 VAE fp32）
 #   quantize convrot8             toolkit/models/registry.py:59
 #   timestep_type 未写             调研文档没有口径，走默认（config_modules.py:560），不瞎猜
 #   bucket 能被 16 整除           moss_image.py:207-208
-# 采样 30 步 / CFG 3.0 来自 toolkit/models/registry.py:59
+# 采样 50 步 / CFG 3.0 / shift 5.0（docs/models/moss_image.md:193）
 job: extension
 config:
   name: moss_image-lora-v1
@@ -65,7 +66,7 @@ config:
       seed: 42
       walk_seed: false
       sampler: flowmatch
-      sample_steps: 30
+      sample_steps: 50
       guidance_scale: 3.0
     logging:
       log_every: 10
@@ -75,6 +76,7 @@ config:
       name_or_path: OpenMOSS-Team/MOSS-Image-Base
       arch: moss_image
       dtype: bf16
+      vae_dtype: float32
       quantize: true
       qtype: convrot8
       quantize_te: true

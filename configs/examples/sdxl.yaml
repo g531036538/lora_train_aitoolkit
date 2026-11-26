@@ -2,8 +2,8 @@
 # 训练底模：stabilityai/stable-diffusion-xl-base-1.0（legacy StableDiffusion 路径）
 #   arch: sdxl            toolkit/config_modules.py:790-792；LEGACY_ARCHS 见 util/get_model.py:46-58
 #   noise_scheduler ddpm   SDXL 不是 flow matching，配 flowmatch 会训坏（config_modules.py:383）
-#   min_snr_gamma 5.0      extensions_built_in/sd_trainer/config/train.example.yaml:43
-#   vae_dtype float16      config_modules.py:690
+#   min_snr_gamma 不设     docs/models/sdxl.md:228（须 >1e-6 才生效）
+#   vae_dtype float32      docs/models/sdxl.md:233（fp16 VAE 偶发 NaN）
 #   不开 quantize          该开关只对 transformer 系生效（config_modules.py:697-698），小显存用 low_vram
 #   bucket 必须能被 16 整除 toolkit/stable_diffusion_model.py:364-372
 # 出图：同底模，sample.sampler 必须与 train.noise_scheduler 一致
@@ -51,7 +51,6 @@ config:
         use_ema: true
         ema_decay: 0.99
       noise_scheduler: ddpm
-      min_snr_gamma: 5.0
     sample:
       sample_every: 250
       sample_start_step: 0
@@ -76,7 +75,7 @@ config:
       name_or_path: stabilityai/stable-diffusion-xl-base-1.0
       arch: sdxl
       dtype: float16
-      vae_dtype: float16
+      vae_dtype: float32
 meta:
   name: '[name]'
   version: '1.0'

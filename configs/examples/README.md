@@ -5,9 +5,9 @@
 
 | 文件 | 训练底模 | 出图底模 | 关键差异 |
 | --- | --- | --- | --- |
-| [`sdxl.yaml`](sdxl.yaml) | `stabilityai/stable-diffusion-xl-base-1.0` | 同左 | `ddpm` + `min_snr_gamma: 5.0`，不开量化 |
-| [`krea2.yaml`](krea2.yaml) | `krea/Krea-2-Raw` | `krea/Krea-2-Turbo` | `flowmatch` + `timestep_type: linear`，**不是 sigmoid** |
-| [`moss_image.yaml`](moss_image.yaml) | `OpenMOSS-Team/MOSS-Image-Base` | `OpenMOSS-Team/MOSS-Image-SFT` | `arch: moss_image` + `uncond_skip_layers: [22]` |
+| [`sdxl.yaml`](sdxl.yaml) | `stabilityai/stable-diffusion-xl-base-1.0` | 同左 | `ddpm`、`vae_dtype: float32`、不设 `min_snr_gamma`，不开量化 |
+| [`krea2.yaml`](krea2.yaml) | `krea/Krea-2-Raw` | `krea/Krea-2-Turbo` | `flowmatch` + `timestep_type: linear`，**不是 sigmoid**；训练期采样 52 步 / guidance 4.5 |
+| [`moss_image.yaml`](moss_image.yaml) | `OpenMOSS-Team/MOSS-Image-Base` | `OpenMOSS-Team/MOSS-Image-SFT` | `arch: moss_image` + `model_kwargs.uncond_skip_layers: [22]`；采样 50 步 / CFG 3.0 / shift 5 |
 
 ## 跑之前改这两行
 

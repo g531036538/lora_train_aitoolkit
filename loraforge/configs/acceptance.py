@@ -151,7 +151,9 @@ _ACCEPTANCE: dict[TargetModel, AcceptancePlan] = {
             mu=krea2_mu((1024 // KREA2_LATENT_DIVISOR) ** 2),
             shift=None,
             negative="",
-            source="toolkit/models/registry.py:26 + krea2.py:81-99",
+            # 出图验收走 Turbo：8 步 / guidance 1.0（toolkit/models/registry.py:26）。
+            # Raw 上的训练期采样是 52 步 / 4.5，见 docs/models/krea2.md:224（UNVERIFIED）。
+            source="toolkit/models/registry.py:26 + docs/models/krea2.md:224",
         ),
         prompts=_THREE_PROMPTS,
         checklist=_CHECKLIST,
@@ -164,12 +166,13 @@ _ACCEPTANCE: dict[TargetModel, AcceptancePlan] = {
             width=1024,
             height=1024,
             sampler="flowmatch",
-            steps=30,
+            # docs/models/moss_image.md:193：官方 sample_steps ≥50
+            steps=50,
             guidance_scale=3.0,
             mu=None,
             shift=MOSS_SHIFT,
             negative="",
-            source="toolkit/models/registry.py:59 + moss_image/src/pipeline.py:17",
+            source="docs/models/moss_image.md:193 + moss_image/src/pipeline.py:17",
         ),
         prompts=_THREE_PROMPTS,
         checklist=_CHECKLIST,

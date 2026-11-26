@@ -1,6 +1,7 @@
 """ai-toolkit 配置生成与校验。接口见 docs/ARCHITECTURE.md。
 
 * :func:`build_config` / :func:`validate_config` —— §3 冻结签名
+* :func:`validate_config_detailed` / :class:`ConfigProblem` —— 带 error/warn 分级
 * :func:`default_plan` / :data:`VRAM_TIERS` —— §8 读口
 * :func:`acceptance_plan` —— 训练后验收（采样参数 + 三提示法）
 """
@@ -27,11 +28,19 @@ from loraforge.configs.plans import (
     plan_for_tier,
     tier_for_vram,
 )
+from loraforge.configs.problems import (
+    ConfigProblem,
+    known_codes,
+    validate_config_detailed,
+)
 
 __all__ = [
     "TrainingPlan",
     "build_config",
     "validate_config",
+    "ConfigProblem",
+    "validate_config_detailed",
+    "known_codes",
     "VramTier",
     "VRAM_TIERS",
     "DEFAULT_STEPS",
