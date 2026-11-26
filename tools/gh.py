@@ -244,6 +244,10 @@ def cmd_commit(a) -> None:
         tree.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
         print(f"  blob {path} ({len(content)} bytes)")
 
+    for path in getattr(a, "delete", None) or []:
+        tree.append({"path": path, "mode": "100644", "type": "blob", "sha": None})
+        print(f"  delete {path}")
+
     if not tree:
         raise SystemExit("no files given")
 
@@ -323,6 +327,7 @@ def main() -> int:
     p.add_argument("--message", default=None)
     p.add_argument("--message-file", default=None, help="UTF-8 文件，中文提交信息用这个")
     p.add_argument("--files", nargs="+", required=True)
+    p.add_argument("--delete", nargs="*", default=None, help="要删除的仓库内路径（传 null sha 给 tree）")
     p.add_argument("--root", default=None)
     p.set_defaults(func=cmd_commit)
 
