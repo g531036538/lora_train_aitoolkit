@@ -12,10 +12,14 @@
 
 from __future__ import annotations
 
+import argparse
 import base64
 import os
+import sys
+import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from loraforge.caption.base import BackendCaps, CaptionContext
 from loraforge.models import DatasetKind, TargetModel
@@ -46,6 +50,12 @@ _MIME = {
     ".jpeg": "image/jpeg",
     ".webp": "image/webp",
 }
+
+# 1x1 透明 PNG，只用于 --check 的最小 vision 请求；不读本地文件。
+_CHECK_IMAGE = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def availability() -> tuple[bool, str]:
@@ -156,6 +166,26 @@ class OpenAIVisionBackend:
             return base
         return base + "/chat/completions"
 
+    def _post(self, payload: dict[str, Any]) -> Any:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            with httpx.Client(timeout=self.timeout, transport=self._transport) as client:
+                response = client.post(self.endpoint, headers=headers, json=payload)
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"VLM 请求失败（网络）：{exc}") from exc
+
+        if response.status_code >= 400:
+            detail = response.text[:300].strip()
+            raise RuntimeError(f"VLM 请求失败：HTTP {response.status_code} {detail}".rstrip())
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"VLM 返回的不是 JSON：HTTP {response.status_code}") from exc
+
     def caption(self, image: Path, ctx: CaptionContext) -> str:
         image = Path(image)
         if not image.exists():
@@ -185,29 +215,36 @@ class OpenAIVisionBackend:
             "temperature": 0.2,
             "max_tokens": _max_tokens(),
         }
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        try:
-            with httpx.Client(timeout=self.timeout, transport=self._transport) as client:
-                response = client.post(self.endpoint, headers=headers, json=payload)
-        except httpx.RequestError as exc:
-            raise RuntimeError(f"VLM 请求失败（网络）：{exc}") from exc
-
-        if response.status_code >= 400:
-            detail = response.text[:300].strip()
-            raise RuntimeError(f"VLM 请求失败：HTTP {response.status_code} {detail}".rstrip())
-
-        try:
-            body = response.json()
-        except ValueError as exc:
-            raise RuntimeError(f"VLM 返回的不是 JSON：HTTP {response.status_code}") from exc
-
+        body = self._post(payload)
         text = _extract_content(body)
         if not text:
             raise RuntimeError("VLM 返回了空打标词")
         return text
+
+    def probe(self) -> tuple[str | None, str]:
+        """发一次最小 vision 请求，返回 (响应里的 model, 回复文本)。"""
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Reply with OK if you can see this image.",
+                        },
+                        {"type": "image_url", "image_url": {"url": _CHECK_IMAGE}},
+                    ],
+                }
+            ],
+            "temperature": 0,
+            "max_tokens": 8,
+        }
+        body = self._post(payload)
+        text = _extract_content(body)
+        model = body.get("model") if isinstance(body, dict) else None
+        echoed = model.strip() if isinstance(model, str) and model.strip() else None
+        return echoed, text
 
 
 def _max_tokens() -> int:
@@ -219,6 +256,80 @@ def _max_tokens() -> int:
     return max(1, value)
 
 
+def _redact(text: str, secret: str) -> str:
+    """把密钥值从任何要打印的文本里去掉，连前几位也不留。"""
+    if secret:
+        return text.replace(secret, "[redacted]")
+    return text
+
+
+def check_endpoint(
+    *,
+    transport: Any = None,
+    out: TextIO | None = None,
+    err: TextIO | None = None,
+) -> int:
+    """``--check`` 的实现。返回进程退出码；不抛异常，不打印密钥。"""
+    out = sys.stdout if out is None else out
+    err = sys.stderr if err is None else err
+
+    available, reason = availability()
+    if not available:
+        print("端点可达：否", file=err)
+        print(f"原因：{reason}", file=err)
+        return 2
+
+    try:
+        backend = OpenAIVisionBackend(transport=transport)
+    except Exception as exc:
+        print("端点可达：否", file=err)
+        print(f"原因：{_redact(str(exc), os.getenv(ENV_KEY, ''))}", file=err)
+        return 2
+
+    started = time.perf_counter()
+    try:
+        echoed, _ = backend.probe()
+    except Exception as exc:
+        elapsed = (time.perf_counter() - started) * 1000
+        print("端点可达：否", file=err)
+        print(f"错误：{_redact(str(exc), backend.api_key)}", file=err)
+        print(f"耗时：{elapsed:.1f} ms", file=err)
+        return 1
+
+    elapsed = (time.perf_counter() - started) * 1000
+    print("端点可达：是", file=out)
+    if echoed:
+        print(f"模型名回显：{_redact(echoed, backend.api_key)}", file=out)
+    else:
+        print(
+            f"模型名回显：（响应未带 model，配置为 {_redact(backend.model, backend.api_key)}）",
+            file=out,
+        )
+    print(f"耗时：{elapsed:.1f} ms", file=out)
+    return 0
+
+
+def main(argv: Sequence[str] | None = None, *, transport: Any = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m loraforge.caption.backends.openai_http",
+        description="OpenAI 兼容 Vision 后端自检。",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="读取环境变量并发一次最小请求，检查端点是否可达",
+    )
+    args = parser.parse_args(argv)
+    if not args.check:
+        parser.print_help()
+        return 2
+    return check_endpoint(transport=transport)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
 __all__ = [
     "CAPS",
     "DEPENDENCY_ERROR",
@@ -227,4 +338,6 @@ __all__ = [
     "ENV_URL",
     "OpenAIVisionBackend",
     "availability",
+    "check_endpoint",
+    "main",
 ]
