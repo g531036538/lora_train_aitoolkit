@@ -160,3 +160,116 @@ class ExportReport:
 4. 填参数 → 调 `build_config` → 预览 YAML → 调 `package` 导出
 
 界面不实现任何打标或 YAML 逻辑。
+
+---
+
+## 7. 批处理与体检：界面唯一入口（`loraforge/caption/pipeline.py`、`checks.py`）
+
+界面**只认下面这些名字**。这几个签名不实现就无法出「原因文字」，所以在这里定死。
+
+```python
+# loraforge/caption/pipeline.py
+@dataclass(frozen=True)
+class BackendInfo:
+    key: str            # 界面下拉用这个值，如 "fake"、"wd-eva02"
+    label: str          # 给人看的名字
+    caps: BackendCaps
+    available: bool     # 依赖/权重是否就绪
+    reason: str         # available=False 时写缺什么；True 时为空串
+
+def list_backends() -> list[BackendInfo]:
+    """列出全部已知后端。不得抛异常：不可用的也要列出来并说明原因。"""
+
+def get_backend(key: str) -> CaptionBackend:
+    """按 key 取实例。未知 key → KeyError；依赖缺失 → RuntimeError(缺什么)。"""
+
+@dataclass(frozen=True)
+class BatchItem:
+    image: Path
+    caption: str | None      # 成功时为最终文本（已套 styler）
+    error: str | None        # 失败时为原因；与 caption 互斥
+
+@dataclass(frozen=True)
+class BatchReport:
+    items: list[BatchItem]
+    written: int
+    failed: int
+    skipped: int             # 已有 .txt 且 overwrite=False
+    @property
+    def ok(self) -> bool: ...
+
+ProgressHook = Callable[[int, int, Path, str | None, str | None], None]
+# (done, total, image, caption_or_None, error_or_None)
+
+def run_batch(
+    images: Sequence[Path],
+    ctx: CaptionContext,
+    backend: CaptionBackend,
+    *,
+    styler: CaptionStyler | None = None,   # None → 按 ctx.target 取默认 styler
+    overwrite: bool = True,
+    on_progress: ProgressHook | None = None,
+) -> BatchReport:
+    """单张失败不中断整批：记进 items 的 error，继续下一张。"""
+```
+
+```python
+# loraforge/caption/checks.py
+CheckCode = Literal["ok", "empty", "too_short", "missing_trigger", "duplicate"]
+Severity  = Literal["info", "warn", "error"]
+
+@dataclass(frozen=True)
+class CheckResult:
+    image: Path
+    code: CheckCode
+    severity: Severity
+    message: str    # 给人看的中文原因，界面直接显示，不要再二次解释
+
+def check_captions(
+    pairs: Sequence[tuple[Path, str]], ctx: CaptionContext
+) -> list[CheckResult]:
+    """每张图一条。全部正常也给一条 code="ok", severity="info"。"""
+```
+
+标红/标黄对应 `severity`：`error` → 红，`warn` → 黄，`info` → 正常。
+
+---
+
+## 8. 配置侧的读口（`loraforge/configs/plans.py`）
+
+界面不许硬编码任何默认数值，一律走这两个读口：
+
+```python
+def default_plan(target: TargetModel) -> TrainingPlan:
+    """按模型给一份能直接用的初始方案。数值出处：docs/models/<target>.md。"""
+
+@dataclass(frozen=True)
+class VramTier:
+    key: str            # "8" / "12" / "16" / "24" / "48"，单位 GB
+    label: str
+    quantize: str | None
+    batch_size: int
+    max_resolution: int
+    note: str
+
+VRAM_TIERS: dict[str, VramTier]
+```
+
+字段名固定；**取值由配置侧按调研文档填**，填错了改数据不改接口。
+
+---
+
+## 9. 测试用的假后端（`loraforge/testing/fakes.py`）
+
+界面测试与打标测试共用同一份假后端，避免两处漂移：
+
+```python
+class FakeBackend:
+    name: str                                  # 默认 "fake"
+    def __init__(self, *, seed_text: str = "a photo of a person", fail_on: set[str] | None = None): ...
+    def caps(self) -> BackendCaps: ...
+    def caption(self, image: Path, ctx: CaptionContext) -> str:
+        """确定性输出：由文件名派生，不含真实识图。fail_on 命中文件名则抛 RuntimeError。"""
+```
+
+这个模块由主管维护，其他人可以 import，不要改。

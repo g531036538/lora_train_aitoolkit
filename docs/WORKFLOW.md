@@ -125,9 +125,14 @@ python -c "import hashlib,sys;[print(p, len(open(p,'rb').read()), sum(1 for _ in
 | 打标工程师 | `loraforge/caption/**`、`tests/test_caption*` |
 | 配置工程师 | `loraforge/configs/**`、`configs/examples/**`、`tests/test_configs*` |
 | 界面工程师 | `app/**`、`loraforge/export/**`、`tests/test_app*`、`tests/test_export*` |
-| 主管 | `README.md`、`CONTRIBUTING.md`、`docs/ARCHITECTURE.md`、`docs/WORKFLOW.md`、`.github/**`、`tools/**`、`pyproject.toml`、`loraforge/models.py`、合并 PR |
+| 主管 | `README.md`、`CONTRIBUTING.md`、`docs/ARCHITECTURE.md`、`docs/WORKFLOW.md`、`.github/**`、`tools/**`、`pyproject.toml`、`loraforge/models.py`、`loraforge/caption/base.py`、`loraforge/testing/**`、`tests/conftest.py`、`tests/test_contracts.py`、合并 PR |
 
-**共享契约**（`loraforge/models.py`、`docs/ARCHITECTURE.md`）只能由主管改。需要改接口 → 开 Issue 说明，主管定。
+**共享契约**（`loraforge/models.py`、`loraforge/caption/base.py`、`docs/ARCHITECTURE.md`）只能由主管改。需要改接口 → 开 Issue 说明，主管定。
+
+## 6.1 写测试的两个坑
+
+- **不要用 `tmp_path`**。本机系统临时目录落在沙箱可写范围外，会报 `could not create numbered dir with prefix pytest-`。用 `tests/conftest.py` 里的 `scratch` fixture（仓库内 `.scratch/`，自动清理），或者 `images` fixture 拿三张假图片。
+- **不要断言控制台打印**。本机 locale 不是 UTF-8，中文 print 出来是乱码，但数据本身可能是对的。要看内容就写文件再用 read 工具读。
 
 ## 7. 什么算「完成」
 

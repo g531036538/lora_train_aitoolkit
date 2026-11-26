@@ -22,3 +22,7 @@ app/web/.cache/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 测试临时目录
+.scratch/
+.tmp/
