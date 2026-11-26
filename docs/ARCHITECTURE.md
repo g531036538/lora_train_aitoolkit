@@ -193,7 +193,14 @@ class BackendInfo:
     reason: str         # available=False 时写缺什么；True 时为空串
 
 def list_backends() -> list[BackendInfo]:
-    """列出全部已知后端。不得抛异常：不可用的也要列出来并说明原因。"""
+    """列出全部已知后端。不得抛异常：不可用的也要列出来并说明原因。
+
+    reason 必须是「稳定前缀 + 可选细节」的形式，前缀取自固定词表：
+      ok / missing_dependency:<name> / model_weights_missing /
+      requires_gpu / requires_network / requires_credentials / unsupported_target
+    界面按前缀渲染图标与分组；前缀之后的文字随便写，给人看。
+    新增前缀不算破坏契约，但必须同时更新本词表，否则界面只能按「未知」处理。
+    """
 
 def get_backend(key: str) -> CaptionBackend:
     """按 key 取实例。未知 key → KeyError；依赖缺失 → RuntimeError(缺什么)。"""
