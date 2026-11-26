@@ -29,15 +29,21 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def image() -> Path:
+def scratch() -> Path:
+    """替代 conftest 的 scratch：本机 mkdtemp 会 chmod 0o700，写不进去。"""
     root = Path(__file__).resolve().parent.parent / ".scratch" / f"caption-http-{uuid.uuid4().hex}"
     root.mkdir(parents=True)
-    path = root / "frame.png"
-    path.write_bytes(b"\x89PNG\r\n\x1a\n")
     try:
-        yield path
+        yield root
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def image(scratch: Path) -> Path:
+    path = scratch / "frame.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    return path
 
 
 def ctx(

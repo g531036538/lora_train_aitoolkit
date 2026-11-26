@@ -21,21 +21,15 @@ from loraforge.testing import FakeBackend
 
 
 @pytest.fixture
-def images() -> list[Path]:
-    """三张假 PNG。
+def scratch() -> Path:
+    """替代 conftest 的 scratch：本机 mkdtemp 会 chmod 0o700，写不进去。
 
-    conftest 的 scratch 用 ``tempfile.mkdtemp``，Windows 上 mkdtemp 会 chmod 0o700、
-    把沙箱继承来的写权限挡掉；这里改用普通 mkdir 建目录，测试才能在本机跑。
+    名字保持 ``scratch``，所以 conftest 的 ``images`` fixture 会复用这个目录。
     """
     root = Path(__file__).resolve().parent.parent / ".scratch" / f"caption-{uuid.uuid4().hex}"
     root.mkdir(parents=True)
-    paths = []
     try:
-        for name in ("frame_01.png", "frame_02.png", "frame_03.png"):
-            path = root / name
-            path.write_bytes(b"\x89PNG\r\n\x1a\n")
-            paths.append(path)
-        yield paths
+        yield root
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
