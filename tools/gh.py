@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import tarfile
+import time
 import urllib.error
 import urllib.request
 
@@ -52,13 +53,19 @@ def _open(url: str, method: str = "GET", payload: dict | None = None, raw: bool 
         data = json.dumps(payload).encode()
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            body = r.read()
-            return body if raw else (json.loads(body) if body else None)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:600]
-        raise SystemExit(f"HTTP {e.code} {method} {url}\n{detail}")
+    last = None
+    for attempt in range(4):  # 这台机器到 GitHub 的 TLS 会偶发 EOF，POST 重试是安全的
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                body = r.read()
+                return body if raw else (json.loads(body) if body else None)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:600]
+            raise SystemExit(f"HTTP {e.code} {method} {url}\n{detail}")
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last = e
+            time.sleep(1.5 * (attempt + 1))
+    raise SystemExit(f"网络失败（重试 4 次）：{method} {url}\n{last}")
 
 
 def api(path: str, method: str = "GET", payload: dict | None = None):
