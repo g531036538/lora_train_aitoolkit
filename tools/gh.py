@@ -104,7 +104,50 @@ def cmd_get(a) -> None:
     body = api(f"/contents/{a.path}" + (f"?ref={a.ref}" if a.ref else ""))
     import base64
 
-    sys.stdout.write(base64.b64decode(body["content"]).decode("utf-8", "replace"))
+    data = base64.b64decode(body["content"])
+    if a.out:
+        with open(a.out, "wb") as f:
+            f.write(data)
+        print(f"wrote {a.out} ({len(data)} bytes)")
+        return
+    sys.stdout.write(data.decode("utf-8", "replace"))
+
+
+# 主管拥有的共享契约文件。成员用 `sync` 一次性拉到最新，不要手抄。
+CONTRACT_FILES = [
+    "docs/ARCHITECTURE.md",
+    "docs/WORKFLOW.md",
+    "loraforge/models.py",
+    "loraforge/caption/base.py",
+    "loraforge/testing/__init__.py",
+    "loraforge/testing/fakes.py",
+    "tests/conftest.py",
+    "pyproject.toml",
+]
+
+
+def cmd_sync(a) -> None:
+    """把共享契约文件更新到 main 的最新版本。只碰这些文件，不碰你的代码。"""
+    for path in CONTRACT_FILES:
+        try:
+            body = api(f"/contents/{path}")
+        except SystemExit as e:
+            print(f"skip {path}: {e}")
+            continue
+        import base64
+
+        data = base64.b64decode(body["content"])
+        cur = None
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                cur = f.read()
+        if cur == data:
+            print(f"ok   {path}")
+            continue
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        print(f"sync {path} ({len(data)} bytes)")
 
 
 # ---------------------------------------------------------------- issues
@@ -245,8 +288,12 @@ def main() -> int:
 
     p = sub.add_parser("get")
     p.add_argument("path")
+    p.add_argument("--out", default=None, help="写进文件，避开控制台编码问题")
     p.add_argument("--ref", default=None)
     p.set_defaults(func=cmd_get)
+
+    p = sub.add_parser("sync", help="更新共享契约文件到 main 最新")
+    p.set_defaults(func=cmd_sync)
 
     p = sub.add_parser("issues")
     p.add_argument("--state", default="open")
