@@ -54,6 +54,9 @@ class CaptionContext:
     trigger: str                 # 触发词，空字符串表示不注入
     language: Literal["en", "zh"] = "en"
     extra: dict | None = None    # 后端专属参数
+    # language 定案：训练用打标词一律英文，.txt 内容不随它变；zh 只影响给人看的
+    # 说明文字（界面预览 / checks message / 错误说明）。要中文训练就新增 target，
+    # 不要复用 language。触发词是拉丁串，语言开关不碰它。
 
 @dataclass(frozen=True)
 class BackendCaps:
@@ -224,7 +227,8 @@ def run_batch(
 
 ```python
 # loraforge/caption/checks.py
-CheckCode = Literal["ok", "empty", "too_short", "missing_trigger", "duplicate"]
+CheckCode = Literal["ok", "empty", "too_short", "missing_trigger", "duplicate",
+                    "identity_removed", "unquoted_text"]
 Severity  = Literal["info", "warn", "error"]
 
 @dataclass(frozen=True)
@@ -235,10 +239,21 @@ class CheckResult:
     message: str    # 给人看的中文原因，界面直接显示，不要再二次解释
 
 def check_captions(
-    pairs: Sequence[tuple[Path, str]], ctx: CaptionContext
+    pairs: Sequence[tuple[Path, str]], ctx: CaptionContext,
+    *, raw: Mapping[Path, str] | None = None,
 ) -> list[CheckResult]:
-    """每张图一条。全部正常也给一条 code="ok", severity="info"。"""
+    """每张图一条。全部正常也给一条 code="ok", severity="info"。
+
+    raw 是「后端原文」，默认 None 时行为与不带 raw 完全一致。
+    给了 raw 才能做两条 warn：
+      - identity_removed：Krea2 剥掉了身份描述（脸型/发型/肤色等）
+      - unquoted_text：MOSS 的图内文字没加引号
+    新检查优先级高于 duplicate，但**仍然每张图只出一条**。
+    """
 ```
+
+`CheckCode` 是**可扩展的字面量**：以后还会加，界面**必须按 `severity` 上色、不要按 code 白名单**，
+否则新增一个 code 就渲染不出来。
 
 标红/标黄对应 `severity`：`error` → 红，`warn` → 黄，`info` → 正常。
 
