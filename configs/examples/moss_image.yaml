@@ -52,6 +52,7 @@ config:
         use_ema: true
         ema_decay: 0.99
       noise_scheduler: flowmatch
+      timestep_type: shift
     sample:
       sample_every: 250
       sample_start_step: 0
