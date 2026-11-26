@@ -251,7 +251,7 @@ steps ≈ 图片张数 × num_repeats × len(resolutions) × 目标 epochs
 | 训脸时训练集里**不要出现别的脸** | 同上 | 作者实测 |
 | 构图上**特写 + 全身都要有**（泛化姿势），**避免人物太远**（像素浪费） | 同上 | 作者实测 |
 | 背景/服装/姿势/表情/光照要多样 | 同上 | 作者实测 |
-| 同一套衣服或道具**别每张都出现** | dataset-deviser 作者复盘（种子文件） | 二手实测 |
+| 同一套衣服或道具**别每张都出现** | dataset-deviser README 规则（非实测） | 竞品规则 |
 | 风格 LoRA 27 张 + 人脸同参数会过拟合 → 风格类步数要更少 | HF 官方博客（作者实测） | 作者实测 |
 | 24GB 单卡：batch 1 + gradient checkpointing 起步 | kohya 官方文档（同类量级） | 官方文档 |
 
@@ -269,7 +269,7 @@ steps ≈ 图片张数 × num_repeats × len(resolutions) × 目标 epochs
 
 **禁忌（写了会坏事的词/写法）**
 - **把身份特征逐图写进 caption**：脸型、发型、肤色写多了会和触发词抢身份，换装时脸漂。身份交给触发词承载（`README.md:21` 同理；`UNVERIFIED`：无源码根据，属社区经验，标出来给主管判断）。
-- **把不变的东西写全**：同一套衣服/同一个道具出现在每张图都被描述 → 被学成角色的一部分（种子文件 `_seed-from-lead.md:54` 两条实测教训，来源为 dataset-deviser 作者复盘，可信度：实测但非本仓库验证）。
+- **把不变的东西写全**：同一套衣服/同一个道具在每张图里都被描述 → 会被学成角色的一部分。这条来自竞品 README 的规则（trigger 学身份、caption 写变化；道具要先命名否则每张重画），**不是实测结论**，判据用 ⑤ 的去触发词对照。
 - **写风格词**：数据集本身是风格 LoRA 时，caption 里再写 `anime style`、`oil painting` 会让触发词只覆盖「内容+风格」双重绑定；`DatasetKind.STYLE` 下 styler 应写内容不写风格（`docs/ARCHITECTURE.md:35`）。
 - **中文/全角标点混入**：SDXL 双 CLIP 对中文基本无响应，caption 必须英文（架构推断，`UNVERIFIED`）。
 - **空 caption 或纯触发词**：`prompt_dropout_prob`/`caption_dropout_rate` 已经负责「丢」，人工再写空等于放大丢概率。
@@ -288,7 +288,7 @@ steps ≈ 图片张数 × num_repeats × len(resolutions) × 目标 epochs
 
 **B. 训练层（首轮跑完看）**
 1. `sample_every=250` 的样图里，`[trigger]` 提示词应稳定复现身份；25 步 / guidance 6.0 / 1024×1024 与推理默认一致（`registry.py:12,50`）。
-2. **三提示法定性**（方法来自 Krea2 二手资料，`_seed-from-lead.md:32`，标 `UNVERIFIED`，SDXL 同样适用）：① 分布内提示（触发词 + 训练集同款构图）② 泛化提示（触发词 + 没见过的场景/服装）③ 去触发词对照（同提示不带 trigger，应回到底座原有分布）。
+2. **三提示法定性**（方法来自社区汇编口径，标 `UNVERIFIED`，见 `_community-evidence.md`；SDXL 同样适用）：① 分布内提示（触发词 + 训练集同款构图）② 泛化提示（触发词 + 没见过的场景/服装）③ 去触发词对照（同提示不带 trigger，应回到底座原有分布）。
 3. **过拟合判据**：连续 save 的样图从「服装/背景被复刻」走向「姿势僵硬、只出训练集的构图」时，取更早的 checkpoint；`max_step_saves_to_keep=4` 就是为此（`config_modules.py:23-34`）。
 4. **步数 sanity**：日志里每 epoch 的样本数应等于 `张数 × num_repeats × len(resolutions)`；对不上说明 resolution 拆数据集的行为被误读（`config_modules.py:1116-1152`）。
 5. **过拟合拐点**：HF 博客作者实测「同参数 2500 步 → 服装/背景/神态全被复刻」，1000 步左右最平衡。样图出现「只会训练集构图、换背景即脸漂」时**先降步数，不要加 rank**。

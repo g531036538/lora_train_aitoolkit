@@ -200,6 +200,17 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 
 ---
 
+### 社区证据（2026-11-27 调研，详见 `_community-evidence.md`）
+
+- **训练可行性有一手实测**：16GB 卡方案——LoRA 只落每个 block 的 6 个线性层（`q k v o ffn_up_gate ffn_down`，42×6=252 个），fp32 master + bf16 GEMM，TE 输出与 latent 全部预缓存（训练时不加载 TE/VAE），DiT 常驻 9.7 GiB，目标「一小时内训出可辨认结果、峰值 <15 GiB」（`sorryhyun/anima_lora` `project/moss_lora/plan.md`）。→ 24GB 跑得动，但必须缓存 + `gradient_checkpointing`。
+- **caption 长度是步时杠杆（同一实测）**：单流结构 attention 是 `(N_img+N_txt)²`，每个文本 token 还要付完整 FFN/QKV；1776×1184 + 1.9k token prompt 时线性 +24%、attention +53% FLOPs。→ `max_text_length: 4096` 是上限不是目标。
+- **背景/主体发糊**：两个用户独立报告「背景到处糊」「糊连主体身体也有」，同一套 prompt 在 Krea2 / Chroma / Flux 正常；官方未回复，机制未知（HF discussions #9、#12）。
+- **风格 LoRA 训不像**：用户报告「style is not identical、形体崩」，未给配置（#12）。
+- **文字能刻准**：1024² 无布局框的纯 T2I，footer 小字网格逐条引号写出，**每条都拼对**、栅格对齐（#14，带图与 recipe）。
+- **i2i 上色 LoRA**：约 1 小时（5070 Ti），参考图经 Qwen3.5 vision tower 进 TE（#6）。注意这是 **i2i**，不是 T2I 角色 LoRA；作者自己的探测也表明图像条件只带回内容与粗布局，**不是像素对齐**。
+- **Base 更适合当 LoRA 底座**（作者 5 条 prompt 的印象，明确说不是测量）；SFT 更完成、偏 gacha 光感。
+- **attention sink 在 chat template 上**：10 个模板 token 吸走 0.24–0.34 的图像 query 质量，训好的 LoRA 几乎不动它 → 改 caption 格式/长度会先动这块，不是无关噪声。
+
 ## ④ caption 风格与禁忌
 
 **官方口径（优先照做）**：官方给了 recaptioner prompt，输出固定 JSON：
@@ -235,7 +246,7 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 - **别把水印写进 caption**：官方明确要求剔除，写进去等于教模型复刻水印。
 - **别改写图内文字**（翻译/简写/拼音化）：官方要求逐字保留，改写会污染文字渲染能力。
 - **别写身份细节**（脸型/发型/肤色逐图写）：与触发词抢身份，换装即脸漂（`README.md:21`；社区经验）。
-- **别把同一套衣服/道具逐图写全**：会被学成角色的一部分（种子 `:54`，dataset-deviser 作者复盘，实测但非本仓库验证）。
+- **别把同一套衣服/道具逐图写全**：会被学成角色的一部分。这条来自竞品 README 的规则（trigger 学身份、caption 写变化），**不是实测结论**；判据用 ⑤ 的去触发词对照。
 - **别依赖 4K token 写废话**：长上下文是容量不是建议长度；有效描述比堆词好。
 
 ---
@@ -272,10 +283,12 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 
 1. 日志 `create LoRA for Text Encoder: 0 modules` 是预期（MOSS TE 无 LoRA 目标）。
 2. 样图：**≥50 步 / CFG 3.0 / shift 5.0 / 1024×1024**（官方 `USERGUIDE.md` + `registry.py:59`）；采样侧 `shift=5.0` 由 `sample_shift` 承载（`moss_image.py:406`），与训练侧的 `timestep_type` 是两回事（见 ③）。
-3. **三提示法定性**：分布内 / 泛化 / 去触发词对照（种子 `:32`，`UNVERIFIED`）。
+3. **三提示法定性**：分布内 / 泛化 / 去触发词对照（社区汇编口径，`UNVERIFIED`；见 `_community-evidence.md`）。
 4. **文字验收单独测**：MOSS 的差异点是长文本渲染，样图里要专门放一条「含引号内文字、多行、中英混排」的 prompt，逐字核对字形/换行/位置；只看整体风格测不到卖点。
 5. **布局验收（仅 `TEXT_LAYOUT` 档）**：按 ① 官方 schema 生成一张含 2–3 个 item 的布局 prompt，核对元素落位；坐标与请求宽高必须匹配。
 6. **步数 sanity**：每 epoch 样本数 = 张数 × `num_repeats` × `len(resolutions)`。
+7. **背景/主体发糊单独记一项**：同一 prompt 用**未加 LoRA 的 Base** 也出一张对照。若基线就糊 → 模型侧现象（社区两个独立报告，官方未解释），不能记成「LoRA 训坏」；若只在 LoRA 后出现 → 才是训练问题。
+8. **caption 长度成本**：记录平均 caption token 数与 s/step。单流结构下步时随 `(N_img+N_txt)²` 涨，长 caption 导致的变慢先截断 caption 再怀疑配置（一手实测，见社区证据）。
 
 ---
 
@@ -290,5 +303,5 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 | 5 | MOSS 的 `lr=1e-4`/`rank=32`/2500 步 | 契约默认，无任何二手校准 | 对照训练 |
 | 6 | `uncond_skip_layers` 在**训练**时是否该设 | 官方推荐 22 是推理口径；训练侧代码未见使用（`src/pipeline.py:20`、`moss_image.py:407`） | 读训练 loss 路径确认是否触发 uncond 分支 |
 | 7 | `DatasetKind.TEXT_LAYOUT` 在本产品里的可行性 | 格式明确，但训练侧无解析、无示例 | 等 #2 确认后再定产品是否上这一档 |
-| 8 | 社区 MOSS-Image 实战经验 | 本轮只做源码 + 官方文档 | Reddit/HF/Civitai 检索，需另开一轮 |
+| 8 | 社区 MOSS-Image 实战（T2I 角色 LoRA） | 已补：16GB 一手实测方案（`anima_lora`）、两个「背景/主体发糊」用户报告、一个文字渲染正面案例、一个 i2i 上色 LoRA；**仍缺**：公开的 T2I 角色 LoRA 完整配置与对照（步数/lr/rank/数据量），以及「发糊」到底来自模型还是采样参数 | 我们自己的 24GB 对照实跑；或官方对「发糊」的回应；Reddit 不可达（`sources.md` §4） |
 | 9 | 官方 recaptioner 的 `long/medium/short` 哪个进训练 caption | 官方只说「可参考这套打标」 | 官方训练脚本/issue，或三档对照 |

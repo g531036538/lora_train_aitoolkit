@@ -175,7 +175,7 @@ config:
 | `sampler` | 否 | `ddpm` | **Krea2 的 `generate_single_image` 不读它**（pipeline 自带 flow match 调度器），写了无效果 | `config_modules.py:82-125`、`krea2.py:411-467` |
 | `width` / `height` | 否 | `512` | int；会被向下取整到 16 的倍数 | `:82-125`、`krea2.py:425-427` |
 | `guidance_scale` | 否 | `7` | **实际生效值 = `max(0, 本值 - 1.0)`**：`krea2.py:455` 传 `guidance = gen_config.guidance_scale - 1.0` | `krea2.py:455` |
-| `sample_steps` | 否 | `20` | int；Raw 建议按官方 52 步，Turbo 8 步 | `:82-125`、种子（`UNVERIFIED`） |
+| `sample_steps` | 否 | `20` | int；Raw 52 步 / Turbo 8 步由 SGLang cookbook 佐证（仍 `UNVERIFIED`） | `:82-125` |
 | `sample_every` / `sample_start_step` | 否 | `100` / `0` | int | 同上 |
 | `prompts` | 否 | 空 | 列表，支持 `[trigger]` | 同上、`BaseSDTrainProcess.py:1079-1082` |
 | `neg` / `seed` / `format` | 否 | `False` / `0` / `jpg` | — | 同上 |
@@ -204,27 +204,40 @@ config:
 
 | 参数 | 起点值 | 为什么 |
 |---|---|---|
-| `model.name_or_path` | `krea/Krea-2-Raw` | 训练用 Raw、Turbo 只验收（`README.md:23`、种子）。仓库名官方 model card 未访问成功 → `UNVERIFIED`，先按 README 口径 |
+| `model.name_or_path` | `krea/Krea-2-Raw` | 训练用 Raw、Turbo 只验收（`README.md:23`；SGLang cookbook 与社区汇编同口径）。仓库名官方 model card 未访问成功 → `UNVERIFIED`，先按 README 口径 |
 | `model.arch` | `krea2`（必写） | 不写会按 `sd1` 加载 pipeline（`config_modules.py:809-831`） |
 | `train.noise_scheduler` | `flowmatch`（必写） | 唯一能进 `set_train_timesteps` 分支的值（见 ② 硬约束 ①） |
 | `train.timestep_type` | `linear` | `set_train_timesteps` 的默认类型，1000→1 均匀；`sigmoid`（TrainConfig 默认）在 flow matching 下是随机分布，无依据。想更贴推理分布可试 `shift`（Krea2 `use_dynamic_shifting=True`，会按图像 token 数算 mu），但**本轮无实测**，标 `UNVERIFIED` |
-| `network.linear` / `linear_alpha` | `32` / `32` | 契约默认（`docs/ARCHITECTURE.md:100-101`），与种子二手校准一致，两处独立指向同一值 |
-| `train.steps` | `2500` | 契约默认（`:99`）；种子二手校准同值。实际 epochs 按「张数×num_repeats×len(resolutions)」核对 |
-| `train.lr` | `1e-4` | 契约默认（`:102`）；种子同值（保守档 5e-5）。**源码默认是 `1e-6`**（`config_modules.py:387`），1e-4 是本项目选择不是源码结论 |
+| `network.linear` / `linear_alpha` | `32` / `32` | 契约默认（`docs/ARCHITECTURE.md:100-101`），与社区二手汇编一致（`_community-evidence.md`） |
+| `train.steps` | `2500` | 契约默认（`:99`）；社区二手汇编同值。实际 epochs 按「张数×num_repeats×len(resolutions)」核对 |
+| `train.lr` | `1e-4` | 契约默认（`:102`）；社区汇编同值（保守档 5e-5）。**源码默认是 `1e-6`**（`config_modules.py:387`），1e-4 是本项目选择不是源码结论 |
 | `train.batch_size` / `gradient_accumulation_steps` | `1` / `1` | 24GB 起点；DiT 6144 宽，先单卡单批跑通 |
 | `train.train_text_encoder` | `false` | 且设 `true` 也无效（硬约束 ②） |
 | `model.dtype` / `te_dtype` | `bf16` / `bf16` | fp16 在 12B 级 DiT 上容易溢出；`get_torch_dtype` 接受 bf16（`train_tools.py:37-49`）。**这一条是工程判断，`UNVERIFIED`** |
 | `model.quantize` / `qtype` | 24GB 先 `true` / `qfloat8` | 注册表推理就是 qfloat8（`registry.py:26`）；SGLang cookbook 实测 DiT bf16 约 24 GB，24GB 单卡光权重就占满（还要 TE、VAE、激活、LoRA 梯度）→ 量化/offload 不是可选项。训练侧显存仍未实测，标 `UNVERIFIED` |
 | `model.vae_dtype` | `fp32`（可选） | 预防 Qwen-Image VAE 在低精度下出 NaN；源码无保护（`config_modules.py:690`），预防性设置 |
-| `datasets[].resolution` | `[512, 768, 1024]` | 契约默认与种子一致；Krea2 原生 1024。注意数据集 ×3 |
+| `datasets[].resolution` | `[512, 768, 1024]` | 契约默认；社区汇编同值；Krea2 原生 1024。注意数据集 ×3 |
 | `datasets[].bucket_tolerance` | `64` | Krea2 对齐量是 16，64 是整数倍（`krea2.py:204-206`、`dataloader_mixins.py:270,315`） |
 | `datasets[].caption_dropout_rate` | `0.05` | 示例同值（`train_lora_flux_24gb.yaml:33`），防 caption 过拟合 |
-| `train.diff_output_preservation` | `false` 起步 | 种子建议开 `true` + `class person`；但需 trigger_word 且不能开 TE，先跑通再加。种子来源可信度：实测但非本仓库验证 |
+| `train.diff_output_preservation` | `false` 起步 | 社区汇编建议开 `true` + `class person`；但需 trigger_word 且不能开 TE，先跑通再加。来源为二手汇编，未复现 |
 | `save.save_every` / `max_step_saves_to_keep` | `250` / `4` | 示例同值；2500 步能留 10 个中间档 |
-| `sample.sample_steps` / `sample.guidance_scale` | Raw：`52` / **`5.5`（生效 4.5）**；Turbo：`8` / `1.0` | 生效 CFG = 本值 − 1（`krea2.py:455`）→ yaml `5.5` 才是 4.5、`1.0` 才是 0（Turbo 无 CFG）。**取值口径已由 PR #15（`3e3797e2`）定为 yaml `5.5` / 生效 4.5**：SGLang cookbook 写的是 diffusers 语义「Raw ≈4.5（1.0=关）」，对齐到 ai-toolkit 的减 1 口径就是 yaml 5.5；种子旧口径「生效 3.5」已弃用。步数由 SGLang 佐证（Raw ~52、Turbo 8）。**仍未经实拍**，标 `UNVERIFIED` |
+| `sample.sample_steps` / `sample.guidance_scale` | Raw：`52` / **`5.5`（生效 4.5）**；Turbo：`8` / `1.0` | 生效 CFG = 本值 − 1（`krea2.py:455`）→ yaml `5.5` 才是 4.5、`1.0` 才是 0（Turbo 无 CFG）。**取值口径已由 PR #15（`3e3797e2`）定为 yaml `5.5` / 生效 4.5**：SGLang cookbook 写的是 diffusers 语义「Raw ≈4.5（1.0=关）」，对齐到 ai-toolkit 的减 1 口径就是 yaml 5.5；早期二手口径「生效 3.5」已弃用。步数由 SGLang 佐证（Raw ~52、Turbo 8）。**仍未经实拍**，标 `UNVERIFIED` |
 | `sample.width` / `height` | `1024` / `1024` | 原生分辨率 |
 
 ---
+
+### 社区证据（2026-11-27 调研，详见 `_community-evidence.md`）
+
+按可信度分开读：**一手实测**指作者跑过并给了数字/日志；**二手汇编**是别人整理的社区经验，我们未复现。
+
+- **Raw 训练 / Turbo 验收**是社区一致口径（SGLang cookbook 给两档采样配方）。但 ai-toolkit 一个 job 只能配一套 `sample` 参数，「训练 Raw、预览 Turbo」仍是未实现的需求（issue #1070）→ 验收必须另跑一次。
+- **步数只有二手区间**：59 张数据集 500 步不可识别 → 900 步约 70% → 1500 步约 90%；另一帖 750 步「踢进」、1700 可用、3500 继续提升；OneTrainer 下 3000 步已过拟合、甜点 500–700（原帖为 r/StableDiffusion，本机不可达，无法核对）。→ **验收回看早期 ckpt，别只测最后一个**。
+- **脸不像先查两件**：① `timestep_type` 用了 FLUX 的 `sigmoid`/`weighted`（社区反复强调，机制与源码分支一致）；② 出图采样器 `res_2s` 系列对 likeness LoRA 漂脸 → 换 `Euler + simple`。两条都在「重训」之前查。
+- **黑发被高饱和粉紫/霓虹光染成挑染**：Krea2 专属偏置，单作者单次实战，未复现 → 训练图少用大范围彩光，提示词显式写「黑发无挑染」。
+- **概念泄漏**：LoRA 在无触发词 prompt 上仍出角色；一份单次报告说换更早 ckpt、降 multiplier 都没解决 → 判据用 ⑤ 的三提示法（去触发词对照）。
+- **`diff_output_preservation` 会把数据集加载两遍**（bucket 还不一样），是特性不是 bug；它需要 `trigger_word`，且不能与 `train_text_encoder` 同开（`SDTrainer.py:95-102`）。
+- **INT8 + layer offloading 同时开**有「训练正常、LoRA 推理完全无效」的用户报告（ai-toolkit issue #1057，单用户称可复现）→ 24GB 省显存时别两个一起开。
+- **工具链**：ai-toolkit / musubi-tuner（12GB 可跑：fp8 scaled + `--blocks_to_swap`）/ DiffSynth-Studio / KONAKONA666；**kohya sd-scripts 不支持 Krea2**（README 全文 grep 无 Krea）。
 
 ## ④ caption 风格与禁忌
 
@@ -242,7 +255,7 @@ config:
 - **别开 `shuffle_tokens`**：它按逗号切分重排，而 Krea2 的 caption 是整句——重排会把句子切成碎片（`config_modules.py:967` 语义 + Krea2 caption 形态）。
 - **别写风格套话**（`masterpiece, best quality, 8k`）：模板要求的是画面描述，套话不产生描述性信号。
 - **别用中文写 caption**：Qwen3-VL 本身多语，但 Krea 2 的公开训练数据以英文描述为主；中文 caption 的效果未验证，标 `UNVERIFIED`，不建议在第一批数据上赌。
-- **别把同一套衣服/道具逐图写全**：每张都描述 → 被学成角色的一部分（种子 `:54` 实测教训，来源 dataset-deviser 作者复盘）。
+- **别把同一套衣服/道具逐图写全**：每张都描述 → 会被学成角色的一部分。这条是竞品 README 的规则（「captions describe everything except the trigger」+ 道具要命名否则每张重画），**不是实测结论**；判据用 ⑤ 的去触发词对照。
 
 ---
 
@@ -259,9 +272,11 @@ config:
 
 1. 日志里 `create LoRA for Text Encoder: 0 modules` 是**预期**（Krea2 TE 无 LoRA 目标）；若你确实需要 TE 微调，这条路当前不存在。
 2. `sample` 样图：Raw 52 步 + `guidance_scale: 5.5`（生效 4.5）；Turbo 8 步 + 生效 CFG 0（`guidance_scale: 1.0`）——两档都要出图，用来区分「LoRA 学坏了」还是「采样参数不对」。取值按 PR #15（`3e3797e2`），未经实拍，`UNVERIFIED`。
-3. **三提示法定性**（种子 `:32`，标 `UNVERIFIED`，方法可用于三模型）：① 分布内（触发词 + 训练集同款）② 泛化（触发词 + 没见过场景/服装）③ 去触发词对照（应回到底座分布）。
+3. **三提示法定性**（社区汇编口径，标 `UNVERIFIED`，方法可用于三模型；见 `_community-evidence.md`）：① 分布内（触发词 + 训练集同款）② 泛化（触发词 + 没见过场景/服装）③ 去触发词对照（应回到底座分布）。
 4. **过拟合判据**：连续 checkpoint 从「服装/背景被复刻」走向「姿势僵硬、只会训练集构图」时取更早的档（`max_step_saves_to_keep=4` 就为这个）。
 5. **步数 sanity**：每 epoch 样本数 = 张数 × `num_repeats` × `len(resolutions)`；对不上说明 resolution 拆数据集被误读。
+6. **出图侧排查顺序（社区经验，二手）**：脸不像 / 不稳时，先换采样器（`res_2s` → `Euler + simple`），再确认 `timestep_type: linear`，最后才怀疑过拟合重训。顺序反了会把采样器问题当训练问题。
+7. **早期 ckpt 必看**：社区步数区间跨度大（500–3500 都有人报成功），`save_every: 250` 的中间档要逐个出样图，不能只测最后一个。
 
 ---
 
@@ -275,5 +290,5 @@ config:
 | 4 | 24GB 是否必须 `quantize: true` | SGLang cookbook 给 DiT bf16 ≈24 GB（第三方部署实测）→ 24GB 单卡几乎必然需要量化/offload；训练侧（LoRA 梯度 + 激活 + 9B TE）仍未实测 | 一次 24GB 实跑，记录峰值显存 |
 | 5 | 量化 + `diff_output_preservation` 能否共存 | 量化模型 `can_merge_in=False`（`BaseSDTrainProcess.py:1985-2000`），DOP 依赖 base 输出对照 | 需读 DOP 的 loss 路径确认是否依赖 merge |
 | 6 | Krea2 上 `content_or_style` 的实际差别 | 只有 timestep 分布机制（`BaseSDTrainProcess.py:1231-1310`） | 两档各跑一次同数据 |
-| 7 | 社区 Krea2 实战（数据集规模/构成、失败模式） | 本轮补了社区来源，但**没有一条覆盖 Krea2**：HF 官方博客只讲 SDXL、kohya 只讲 SDXL/MOSS，Reddit 三条路径全部访问失败（见 `sources.md` §4） | 能访问 Reddit/Civitai 的出口，或人工摘录 Krea2 带图对照的帖子；否则只能等我们自己的实跑 |
+| 7 | 社区 Krea2 实战：**带完整配置的一手实测** | 已有：`krea2-lora-training`（二手汇编，作者称做过多轮 cysgirl 实跑，未公开日志）、ai-toolkit issue #1057/#1070（单用户报告）、HF discussions（多为安装/工作流问题）。**仍缺**：公开的 rank/lr/steps 对照数据、带图对照的失败复盘。Reddit 三条路径全部访问失败（`sources.md` §4） | 一次我们自己的对照实跑（rank 16/32 × lr 5e-5/1e-4）；或能访问 Reddit/Civitai 的出口摘录带图帖 |
 | 8 | Krea2 出图验收的 guidance 口径（yaml 5.5 / 生效 4.5） | PR #15（`3e3797e2`）依据 `krea2.py:455` 的减 1 定值，逻辑自洽但**未经实拍**；SGLang cookbook 的 4.5 是 diffusers 语义，两者换算后一致 | 一次 Raw 实拍：yaml `5.5` 与 `4.5` 各出一张，比「是否过曝/结构崩」 |
