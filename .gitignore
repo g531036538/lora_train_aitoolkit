@@ -26,3 +26,7 @@ Thumbs.db
 # 测试临时目录
 .scratch/
 .tmp/
+.pytest_cache/
+
+# 上游源码副本（调研用，不入仓）
+_src/
