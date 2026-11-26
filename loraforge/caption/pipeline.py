@@ -142,35 +142,34 @@ def run_batch(
 
     for index, image in enumerate(paths, start=1):
         out_path = image.with_suffix(".txt")
+        caption: str | None = None
+        error: str | None = None
         try:
+            existing = ""
             if not overwrite and out_path.exists():
                 existing = _read_existing(out_path)
-                if existing:
-                    skipped += 1
-                    items.append(BatchItem(image=image, caption=existing, error=None))
-                    if on_progress is not None:
-                        on_progress(index, total, image, existing, None)
-                    continue
+            if existing:
+                skipped += 1
+                caption = existing
+            else:
+                raw = backend.caption(image, ctx)
+                if not raw or not raw.strip():
+                    raise RuntimeError("后端返回了空打标词（空打标会静默毁掉训练）")
 
-            raw = backend.caption(image, ctx)
-            if not raw or not raw.strip():
-                raise RuntimeError("后端返回了空打标词（空打标会静默毁掉训练）")
+                caption = active_styler.render(raw, ctx)
+                if not caption or not caption.strip():
+                    raise RuntimeError("styler 生成了空打标词")
 
-            caption = active_styler.render(raw, ctx)
-            if not caption or not caption.strip():
-                raise RuntimeError("styler 生成了空打标词")
-
-            out_path.write_text(caption.rstrip() + "\n", encoding="utf-8")
-            written += 1
-            items.append(BatchItem(image=image, caption=caption, error=None))
-            if on_progress is not None:
-                on_progress(index, total, image, caption, None)
+                out_path.write_text(caption.rstrip() + "\n", encoding="utf-8")
+                written += 1
         except Exception as exc:
             failed += 1
+            caption = None
             error = str(exc).strip() or type(exc).__name__
-            items.append(BatchItem(image=image, caption=None, error=error))
-            if on_progress is not None:
-                on_progress(index, total, image, None, error)
+
+        items.append(BatchItem(image=image, caption=caption, error=error))
+        if on_progress is not None:
+            on_progress(index, total, image, caption, error)
 
     return BatchReport(items=items, written=written, failed=failed, skipped=skipped)
 
