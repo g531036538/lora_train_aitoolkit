@@ -4,10 +4,11 @@
 #   noise_scheduler flowmatch    krea2.py:201-202
 #   timestep_type linear         **绝不能写 sigmoid**，那是 FLUX 的口径，社区反复踩的坑
 #   quantize qfloat8             toolkit/models/registry.py:26；qtype 默认 qfloat8（config_modules.py:695-703）
-#   diff_output_preservation true config_modules.py:495
-#   train_text_encoder false     config_modules.py:407（Krea2 的 TE 不参与训练）
+#   diff_output_preservation false  docs/models/krea2.md:222（先跑通再开；开了必须给 trigger_word 且不能开 TE）
+#   train_text_encoder false     docs/models/krea2.md:166（Krea2 的 TE 是静默空操作）
 #   bucket 能被 16 整除          krea2.py:204-206（VAE 8 × patch 2）
-# 采样 8 步 / CFG 1.0 是 registry.py:26 的 Turbo 口径，在 Raw 上属于 UNVERIFIED，先用它占位
+# 采样：Raw 上 52 步 / guidance 4.5（docs/models/krea2.md:224，真生效 CFG = 本值 − 1，UNVERIFIED）；
+#       出图验收走 Turbo：8 步 / guidance 1.0（toolkit/models/registry.py:26）
 job: extension
 config:
   name: krea2-lora-v1
@@ -51,7 +52,7 @@ config:
         ema_decay: 0.99
       noise_scheduler: flowmatch
       timestep_type: linear
-      diff_output_preservation: true
+      diff_output_preservation: false
     sample:
       sample_every: 250
       sample_start_step: 0
@@ -66,8 +67,8 @@ config:
       seed: 42
       walk_seed: false
       sampler: flowmatch
-      sample_steps: 8
-      guidance_scale: 1.0
+      sample_steps: 52
+      guidance_scale: 4.5
     logging:
       log_every: 10
       use_wandb: false
@@ -76,6 +77,7 @@ config:
       name_or_path: krea/Krea-2-Raw
       arch: krea2
       dtype: bf16
+      vae_dtype: float32
       quantize: true
       qtype: qfloat8
       quantize_te: true

@@ -1,4 +1,4 @@
-"""配置层测试：三模型的必填字段、危险组合、yaml round-trip。
+"""配置层测试：三模型的必填字段、危险组合、error/warn 分级、yaml round-trip。
 
 夹具用 ``scratch``（仓库内可写目录），不要用 ``tmp_path``——本机系统临时目录
 在沙箱外，见 ``tests/conftest.py``。
@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import copy
 import json
-import shutil
-import uuid
 from pathlib import Path
 
 import pytest
@@ -17,13 +15,16 @@ import yaml
 
 from loraforge.configs import (
     VRAM_TIERS,
+    ConfigProblem,
     acceptance_dict,
     build_config,
     default_plan,
+    known_codes,
     krea2_mu,
     plan_for_tier,
     tier_for_vram,
     validate_config,
+    validate_config_detailed,
 )
 from loraforge.models import TargetModel
 
@@ -39,22 +40,16 @@ def cfgs() -> dict[TargetModel, dict]:
     return {t: build_config(t, default_plan(t)) for t in TARGETS}
 
 
-@pytest.fixture
-def writable_scratch(scratch: Path) -> Path:
-    """可写的工作目录，锚在 ``scratch`` 的父目录（仓库内 ``.scratch/``）。
+def _codes(items: list[ConfigProblem]) -> set[str]:
+    return {p.code for p in items}
 
-    ``scratch`` 本身由 ``tempfile.mkdtemp(mode=0o700)`` 创建，本机 Windows 上
-    这个 mode 会变成「只给 owner」的 ACL，当前进程连 ``chmod`` 都拿不到
-    ``WRITE_DAC``，写文件直接 ``PermissionError``。所以不往它里面写，
-    而在同一个 ``.scratch/`` 下用默认权限另建一个，用完删掉。
-    """
-    base: Path = scratch.parent
-    path = base / f"w-{uuid.uuid4().hex[:8]}"
-    path.mkdir()
-    try:
-        yield path
-    finally:
-        shutil.rmtree(path, ignore_errors=True)
+
+def _warn_codes(cfg: dict, target: TargetModel) -> set[str]:
+    return _codes([p for p in validate_config_detailed(cfg, target) if p.severity == "warn"])
+
+
+def _error_codes(cfg: dict, target: TargetModel) -> set[str]:
+    return _codes([p for p in validate_config_detailed(cfg, target) if p.severity == "error"])
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +105,10 @@ def test_sdxl_is_legacy_path_without_quantize(cfgs: dict[TargetModel, dict]) -> 
     assert proc["model"]["arch"] == "sdxl"
     # SDXL 不是 flow matching，不能配 flowmatch（docs/models 里反复强调的坑）
     assert proc["train"]["noise_scheduler"] == "ddpm"
-    assert proc["train"]["min_snr_gamma"] == 5.0
-    assert proc["model"]["vae_dtype"] == "float16"
+    # docs/models/sdxl.md:228 的起点是「不设」min_snr_gamma
+    assert "min_snr_gamma" not in proc["train"]
+    # docs/models/sdxl.md:233：官方 VAE 用 fp32
+    assert proc["model"]["vae_dtype"] == "float32"
     # quantize 只对 transformer 系开放
     assert "quantize" not in proc["model"] or not proc["model"]["quantize"]
     assert proc["sample"]["sampler"] == "ddpm"
@@ -127,10 +124,14 @@ def test_krea2_uses_flowmatch_linear_not_sigmoid(cfgs: dict[TargetModel, dict]) 
     assert proc["train"]["timestep_type"] == "linear"
     # 这是社区反复踩的坑：FLUX 的 sigmoid 不许搬过来
     assert proc["train"]["timestep_type"] != "sigmoid"
-    assert proc["train"]["diff_output_preservation"] is True
+    # docs/models/krea2.md:222：先跑通再开 diff_output_preservation
+    assert proc["train"]["diff_output_preservation"] is False
     assert proc["model"]["quantize"] is True
     assert proc["model"]["qtype"] == "qfloat8"
+    # docs/models/krea2.md:224：训练在 Raw 上采样，是 52 步 / guidance 4.5
     assert proc["sample"]["sampler"] == "flowmatch"
+    assert proc["sample"]["sample_steps"] == 52
+    assert proc["sample"]["guidance_scale"] == 4.5
 
 
 def test_moss_uses_base_with_uncond_skip_layers(cfgs: dict[TargetModel, dict]) -> None:
@@ -143,7 +144,8 @@ def test_moss_uses_base_with_uncond_skip_layers(cfgs: dict[TargetModel, dict]) -
     assert kwargs["sample_shift"] == 5.0
     assert proc["train"]["noise_scheduler"] == "flowmatch"
     assert proc["sample"]["sampler"] == "flowmatch"
-    assert proc["sample"]["sample_steps"] == 30
+    # docs/models/moss_image.md:193：官方 sample_steps ≥50
+    assert proc["sample"]["sample_steps"] == 50
     assert proc["sample"]["guidance_scale"] == 3.0
 
 
@@ -155,6 +157,9 @@ def test_moss_uses_base_with_uncond_skip_layers(cfgs: dict[TargetModel, dict]) -
 @pytest.mark.parametrize("target", TARGETS)
 def test_default_configs_validate_clean(cfgs: dict[TargetModel, dict], target: TargetModel) -> None:
     assert validate_config(cfgs[target], target) == []
+    # 默认方案只允许出现「分辨率档位多 → 数据集被拆成多份」这条提示性告警
+    assert _error_codes(cfgs[target], target) == set()
+    assert _warn_codes(cfgs[target], target) == {"datasets.resolution-parallel"}
 
 
 def test_validate_rejects_missing_job_and_process(cfgs: dict[TargetModel, dict]) -> None:
@@ -200,14 +205,21 @@ def test_validate_rejects_sdxl_flowmatch(cfgs: dict[TargetModel, dict]) -> None:
     assert any("flowmatch" in p for p in problems)
 
 
-def test_validate_rejects_moss_without_uncond_skip_layers(cfgs: dict[TargetModel, dict]) -> None:
+def test_moss_uncond_skip_layers_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """docs/models/moss_image.md:195：uncond_skip_layers 是推理侧 SLG 口径。
+
+    训练侧源码没读它，缺了只是出图对照组不齐，不该拦导出。
+    """
     target = TargetModel.MOSS
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["model"]["model_kwargs"].pop("uncond_skip_layers")
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("uncond_skip_layers" in p for p in problems)
+    detailed = validate_config_detailed(cfg, target)
+    hits = [p for p in detailed if p.code == "model.moss-uncond-skip-layers"]
+    assert hits, [p.code for p in detailed]
+    assert hits[0].severity == "warn"
+    assert "uncond_skip_layers" in hits[0].message
+    assert validate_config(cfg, target) == []
 
 
 def test_validate_rejects_moss_arch_suffix(cfgs: dict[TargetModel, dict]) -> None:
@@ -232,35 +244,44 @@ def test_validate_rejects_rank_alpha_mismatch(cfgs: dict[TargetModel, dict]) -> 
     assert any("alpha" in p for p in problems)
 
 
-def test_validate_rejects_sampler_mismatch(cfgs: dict[TargetModel, dict]) -> None:
+def test_sampler_mismatch_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """出图口径不一致只是看到的东西不对，训练本身照跑。"""
     target = TargetModel.KREA2
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["sample"]["sampler"] = "ddpm"
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("sampler" in p for p in problems)
+    assert "sample.sampler-mismatch" in _warn_codes(cfg, target)
+    assert validate_config(cfg, target) == []
 
 
-def test_validate_rejects_bad_resolution(cfgs: dict[TargetModel, dict]) -> None:
+def test_resolution_not_aligned_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """分辨率没对齐 64 只是多 padding（docs/models/krea2.md:220），不拦导出。"""
     target = TargetModel.SDXL
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["datasets"][0]["resolution"] = [1000]
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("整除" in p for p in problems)
+    assert "datasets.resolution-alignment" in _warn_codes(cfg, target)
+    assert validate_config(cfg, target) == []
 
 
-def test_validate_rejects_sdxl_quantize(cfgs: dict[TargetModel, dict]) -> None:
+def test_caption_dropout_high_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    target = TargetModel.SDXL
+    cfg = copy.deepcopy(cfgs[target])
+    _proc(cfg)["datasets"][0]["caption_dropout_rate"] = 0.4
+
+    assert "datasets.caption-dropout-high" in _warn_codes(cfg, target)
+    assert validate_config(cfg, target) == []
+
+
+def test_sdxl_quantize_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """config_modules.py:697-698：量化只对 transformer 生效，SDXL 写了等于没写。"""
     target = TargetModel.SDXL
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["model"]["quantize"] = True
     _proc(cfg)["model"]["qtype"] = "qfloat8"
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("量化" in p for p in problems)
+    assert "model.quantize-on-sdxl" in _warn_codes(cfg, target)
+    assert validate_config(cfg, target) == []
 
 
 def test_validate_reports_at_least_five_distinct_errors(cfgs: dict[TargetModel, dict]) -> None:
@@ -271,8 +292,8 @@ def test_validate_reports_at_least_five_distinct_errors(cfgs: dict[TargetModel, 
         (TargetModel.SDXL, lambda c: _proc(c)["train"].update(noise_scheduler="flowmatch"), "flowmatch"),
         (
             TargetModel.MOSS,
-            lambda c: _proc(c)["model"]["model_kwargs"].pop("uncond_skip_layers"),
-            "uncond_skip_layers",
+            lambda c: _proc(c)["train"].update(train_text_encoder=True),
+            "text_encoder",
         ),
         (
             TargetModel.SDXL,
@@ -304,16 +325,88 @@ def test_validate_accepts_raw_dict_with_missing_sections() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 分级层：error 拦导出，warn 只提示
+# ---------------------------------------------------------------------------
+
+
+def test_error_and_warn_coexist_but_validate_keeps_only_errors(
+    cfgs: dict[TargetModel, dict],
+) -> None:
+    """同一份配置既有硬错又有告警时，validate_config 只吐硬错。"""
+    target = TargetModel.SDXL
+    cfg = copy.deepcopy(cfgs[target])
+    _proc(cfg)["train"]["noise_scheduler"] = "flowmatch"  # error
+    _proc(cfg)["datasets"][0]["resolution"] = [1000]  # warn
+
+    detailed = validate_config_detailed(cfg, target)
+    codes = _codes(detailed)
+    assert "train.noise-scheduler-flowmatch-on-sdxl" in codes
+    assert "datasets.resolution-alignment" in codes
+
+    hard = validate_config(cfg, target)
+    assert hard
+    # 只能剩 error 的 message，warn 不许漏进去
+    warn_messages = {p.message for p in detailed if p.severity == "warn"}
+    assert not (set(hard) & warn_messages)
+    assert {p.message for p in detailed if p.severity == "error"} == set(hard)
+
+
+def test_known_codes_covers_every_emitted_code(cfgs: dict[TargetModel, dict]) -> None:
+    """发出的每个 code 都必须在登记表里（否则 _problem 会 KeyError）。"""
+    emitted: set[str] = set()
+    for target in TARGETS:
+        emitted |= _codes(validate_config_detailed(cfgs[target], target))
+
+    mutations = [
+        (TargetModel.SDXL, lambda c: c.pop("job")),
+        (TargetModel.SDXL, lambda c: _proc(c)["train"].update(noise_scheduler="flowmatch")),
+        (TargetModel.SDXL, lambda c: _proc(c)["model"].update(quantize=True)),
+        (TargetModel.KREA2, lambda c: _proc(c)["train"].update(timestep_type="sigmoid")),
+        (TargetModel.KREA2, lambda c: _proc(c)["sample"].update(sampler="ddpm")),
+        (TargetModel.MOSS, lambda c: _proc(c)["model"]["model_kwargs"].pop("uncond_skip_layers")),
+        (TargetModel.MOSS, lambda c: _proc(c)["train"].update(train_text_encoder=True)),
+        (TargetModel.SDXL, lambda c: _proc(c)["datasets"][0].update(caption_dropout_rate=0.5)),
+        (TargetModel.MOSS, lambda c: _proc(c)["model"].update(qtype="w8a8-unknown")),
+        (TargetModel.MOSS, lambda c: _proc(c)["model"].update(vae_dtype="float16")),
+        (TargetModel.SDXL, lambda c: _proc(c)["datasets"][0].update(resolution=[1000])),
+    ]
+    for target, mutate in mutations:
+        cfg = copy.deepcopy(cfgs[target])
+        mutate(cfg)
+        emitted |= _codes(validate_config_detailed(cfg, target))
+
+    registry = known_codes()
+    assert emitted <= set(registry)
+    assert {registry[c] for c in emitted} <= {"error", "warn"}
+    # 两侧都得有，否则分级没意义
+    assert "error" in {registry[c] for c in emitted}
+    assert "warn" in {registry[c] for c in emitted}
+
+
+def test_problem_codes_are_stable_across_calls(cfgs: dict[TargetModel, dict]) -> None:
+    target = TargetModel.KREA2
+    cfg = copy.deepcopy(cfgs[target])
+    _proc(cfg)["train"].update(timestep_type="sigmoid")
+    _proc(cfg)["sample"].update(sampler="ddpm")
+
+    first = validate_config_detailed(cfg, target)
+    second = validate_config_detailed(copy.deepcopy(cfg), target)
+    assert [p.code for p in first] == [p.code for p in second]
+    assert [p.severity for p in first] == [p.severity for p in second]
+    assert all(isinstance(p, ConfigProblem) for p in first)
+
+
+# ---------------------------------------------------------------------------
 # yaml round-trip
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("target", TARGETS)
 def test_yaml_roundtrip_is_stable(
-    cfgs: dict[TargetModel, dict], writable_scratch: Path, target: TargetModel
+    cfgs: dict[TargetModel, dict], scratch: Path, target: TargetModel
 ) -> None:
     cfg = cfgs[target]
-    path = writable_scratch / f"{target.value}.yaml"
+    path = scratch / f"{target.value}.yaml"
 
     first = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
     path.write_text(first, encoding="utf-8")
@@ -412,7 +505,7 @@ def test_acceptance_data_is_structured() -> None:
 
     moss = acceptance_dict(TargetModel.MOSS)
     assert moss["verify_model"] == "OpenMOSS-Team/MOSS-Image-SFT"
-    assert moss["sampling"]["steps"] == 30
+    assert moss["sampling"]["steps"] == 50
     assert moss["sampling"]["shift"] == 5.0
 
     sdxl = acceptance_dict(TargetModel.SDXL)
