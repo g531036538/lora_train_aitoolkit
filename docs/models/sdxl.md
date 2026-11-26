@@ -225,13 +225,13 @@ steps ≈ 图片张数 × num_repeats × len(resolutions) × 目标 epochs
 | `model.name_or_path` | `stabilityai/stable-diffusion-xl-base-1.0` | 唯一被注册表与 README 同时列出的 SDXL 底座（`registry.py:50`、ai-toolkit README:39 行区） |
 | `model.arch` | `sdxl`（或 `is_xl: true`） | 否则 arch 落到 `sd1`（`config_modules.py:809-831`），会按 SD1.5 加载 pipeline |
 | `model.dtype` | `float16`（默认） | 默认值即可；24GB 下 bf16 更稳时可改 `train.dtype: bf16` 并把 `model.vae_dtype` 单独设 `float32` |
-| `model.vae_dtype` | `float32` | 默认随 `model.dtype`（fp16）；SDXL VAE 在 fp16 下编码偶发 NaN 是社区共识，**本仓库源码无任何保护**（`config_modules.py:690`、`stable_diffusion_model.py:188`）。该结论标 `UNVERIFIED`：未在本机复现，属预防性设置 |
-| `network.linear` / `linear_alpha` | `32` / `32` | 目标模型越大 rank 越吃得住；与契约默认一致（`docs/ARCHITECTURE.md:100-101`）。`alpha=rank/2` 的社区说法 `UNVERIFIED`，不采纳 |
-| `train.steps` | `2500` | 契约默认（`ARCHITECTURE.md:99`）；实际 epochs 按 ② 的公式核对 |
-| `train.lr` | `1e-4` | 契约默认（`:102`）。**注意 ai-toolkit 源码默认是 `1e-6`**（`config_modules.py:387`），1e-4 是本项目选择，不是源码结论 |
+| `model.vae_dtype` | `float32` | 默认随 `model.dtype`（fp16），而 SDXL VAE **在 fp16 下不稳定**——kohya 官方文档直接要求 fp16 时必须开 `--no_half_vae`（`kohya-ss/sd-scripts docs/sdxl_train_network.md`）。**ai-toolkit 没有等价开关**（`config_modules.py:690`、`stable_diffusion_model.py:188` 只跟随 dtype），只能靠 `vae_dtype: float32` 兜住。依据等级：官方文档支持，本机未复现 NaN |
+| `network.linear` / `linear_alpha` | `32` / `32` | 契约默认（`docs/ARCHITECTURE.md:100-101`）。社区实测同向：HF 官方博客把 **rank 32 当默认**，rank 64 皮肤「磨皮」不真实；kohya 官方 SDXL 示例 `--network_dim=32 --network_alpha=16`。两家都落在 32，alpha 取 rank 还是 rank/2 留作对照项（HF 博客、`kohya-ss/sd-scripts docs/sdxl_train_network.md`） |
+| `train.steps` | `2500`（人脸小集按 **120×张数** 折算） | 契约默认（`ARCHITECTURE.md:99`），实际 epochs 按 ② 的公式核对。HF 官方博客作者实测：**6 张脸 → 720 步（120×张数）**；**27 张风格图用 2500 步明显过拟合**，1000 步（batch 1–2）最平衡 → 步数随张数和类型缩放，不是固定值（`huggingface/blog` @ `8000ba4` `sdxl_lora_advanced_script.md`，作者实测） |
+| `train.lr` | `1e-4`（若开 TE 则降到 `5e-5`） | 契约默认（`:102`）；源码默认 `1e-6`（`config_modules.py:387`），1e-4 是本项目选择。社区口径：HF 博客 UNet `1e-4` / TE `5e-5`（普通微调）或 `3e-4`（pivotal tuning）；kohya 示例 UNet `1e-4` / TE1·TE2 各 `1e-5`。**两家都把 TE lr 设得比 UNet 小**，而 ai-toolkit 把 TE lr 写死等于 `lr` → 开 `train_text_encoder` 时全局 `lr` 取 `5e-5` 折中 |
 | `train.train_text_encoder` | `false` | TE 加载即冻结；且 `text_encoder_lr` 写不进（见 ②），要单独调 TE lr 必须改代码。训 TE 只增显存与漂脸风险 |
 | `train.noise_scheduler` | `ddpm`（默认） | SD 系调度器表推荐起点；和 SDXL 原生采样习惯一致（`sampler.py:31-50`） |
-| `train.min_snr_gamma` | 不设 | SDXL 无需；开启阈值 >1e-6，写过小值等于没开（`extensions_built_in/sd_trainer/SDTrainer.py:1059-1070`） |
+| `train.min_snr_gamma` | 首轮不设；对照实验用 `5.0` | 机制：阈值须 >1e-6 才生效（`SDTrainer.py:1059-1070`）。HF 官方博客作者推荐 **5.0**，但同文说**小数据集上差别不明显，大数据集才显著** → 首轮不设，第二组再开 5.0 做对照 |
 | `train.content_or_style` | `balanced`（默认） | 角色/风格都吃得下；`style` 会向低噪声细节偏（`:1231-1310`） |
 | `train.batch_size` / `gradient_accumulation_steps` | `1` / `1` | 24GB 起点；显存够再加 accum（只能用 `gradient_accumulation_steps`，不能同时给另一个键） |
 | `train.optimizer` | `adamw`（默认） | 默认即合理；8bit 版省显存但需 bitsandbytes（`optimizer.py:4-119`） |
@@ -242,6 +242,20 @@ steps ≈ 图片张数 × num_repeats × len(resolutions) × 目标 epochs
 | `save.dtype` / `save_every` / `max_step_saves_to_keep` | `float16` / `250` / `4` | 示例同值（`:19-21`） |
 | `sample.sampler` / `sample_steps` / `guidance_scale` | `ddpm` / `25` / `6.0` | SDXL 推理默认（`registry.py:12,50`），且 sampler 与训练一致 |
 | `sample.sample_every` | `250` | 与 `save_every` 对齐，好定位过拟合拐点 |
+
+### 数据集该长什么样（作者实测 + 官方文档）
+
+| 结论 | 出处 | 可信度 |
+|---|---|---|
+| 质量 > 数量，人脸 LoRA **6–10 张**就够 | HF 官方博客（作者实测） | 作者实测 |
+| 训脸时训练集里**不要出现别的脸** | 同上 | 作者实测 |
+| 构图上**特写 + 全身都要有**（泛化姿势），**避免人物太远**（像素浪费） | 同上 | 作者实测 |
+| 背景/服装/姿势/表情/光照要多样 | 同上 | 作者实测 |
+| 同一套衣服或道具**别每张都出现** | dataset-deviser 作者复盘（种子文件） | 二手实测 |
+| 风格 LoRA 27 张 + 人脸同参数会过拟合 → 风格类步数要更少 | HF 官方博客（作者实测） | 作者实测 |
+| 24GB 单卡：batch 1 + gradient checkpointing 起步 | kohya 官方文档（同类量级） | 官方文档 |
+
+> 只收「能核到作者本人实测」的条目。Reddit 本机不可达（见 `docs/sources.md` §4），论坛传闻一条没收。
 
 ---
 
@@ -277,6 +291,8 @@ steps ≈ 图片张数 × num_repeats × len(resolutions) × 目标 epochs
 2. **三提示法定性**（方法来自 Krea2 二手资料，`_seed-from-lead.md:32`，标 `UNVERIFIED`，SDXL 同样适用）：① 分布内提示（触发词 + 训练集同款构图）② 泛化提示（触发词 + 没见过的场景/服装）③ 去触发词对照（同提示不带 trigger，应回到底座原有分布）。
 3. **过拟合判据**：连续 save 的样图从「服装/背景被复刻」走向「姿势僵硬、只出训练集的构图」时，取更早的 checkpoint；`max_step_saves_to_keep=4` 就是为此（`config_modules.py:23-34`）。
 4. **步数 sanity**：日志里每 epoch 的样本数应等于 `张数 × num_repeats × len(resolutions)`；对不上说明 resolution 拆数据集的行为被误读（`config_modules.py:1116-1152`）。
+5. **过拟合拐点**：HF 博客作者实测「同参数 2500 步 → 服装/背景/神态全被复刻」，1000 步左右最平衡。样图出现「只会训练集构图、换背景即脸漂」时**先降步数，不要加 rank**。
+6. **文字别当验收指标**：SDXL 底座本身文字渲染弱，数据集含文字（招牌/logo）时模板字模糊不算 LoRA 失败——这是底座限制（社区共识，`UNVERIFIED`）；文字档的验收对象是 MOSS。
 
 ---
 
@@ -284,9 +300,9 @@ steps ≈ 图片张数 × num_repeats × len(resolutions) × 目标 epochs
 
 | # | 缺口 | 现状 | 确认需要 |
 |---|---|---|---|
-| 1 | `lr=1e-4`、`rank=32/alpha=32` 是否为 SDXL 最优 | 契约默认值，非实测 | 一组对照训练（rank 16/32/64 × lr 5e-5/1e-4）并记录样图 |
-| 2 | SDXL VAE fp16 NaN 的触发条件 | 源码无保护，社区共识 | 本机复现 encode 出 NaN 的样本，或官方 issue |
-| 3 | `min_snr_gamma` 对 SDXL 的增益 | 源码只给机制，无推荐值 | 5.0 vs 不设的对照 |
+| 1 | `lr=1e-4`、`rank=32/alpha=32` 是否最优 | 已有两家社区实测支持 32 与 1e-4（HF 博客、kohya 示例）；alpha 取 32 还是 16 未验 | 一组对照：alpha 32/16 × lr 1e-4/5e-5，记录样图与脸漂 |
+| 2 | SDXL VAE fp16 不稳定的具体触发条件 | 源码无保护；kohya 官方文档已确认「fp16 下不稳定、必须 `--no_half_vae`」，但触发阈值（哪些图会 NaN/灰噪）未查 | 官方 issue 或本机复现：fp16 VAE 编一批图，找出出错的样本特征 |
+| 3 | `min_snr_gamma` 对 SDXL 的增益 | HF 博客推荐 5.0，但自述小数据集不明显 | 5.0 vs 不设的对照（同数据、同步数） |
 | 4 | `content_or_style` 对角色 LoRA 的实际差异 | 只有 timestep 分布机制（`:1231-1310`） | 两档各跑一次同数据 |
 | 5 | SDXL 12.9B/2.6B 等参数量数字 | 未在源码中核对 | 官方 model card（2026-11-27 HF 抓取失败，见 `sources.md`） |
-| 6 | 社区 lr×steps×rank 经验值 | 本轮未做社区调研（只做了源码） | Reddit/HF 检索，需另开一轮 |
+| 6 | 社区经验的覆盖面 | 已补 HF 官方博客 + kohya 官方文档两类作者实测；**Reddit/Civitai 本机不可达**（fetch 失败、firecrawl 403，见 `sources.md` §4），论坛口径缺失 | 需要能访问 Reddit 的出口，或人工摘录 3–5 篇带图对照的帖子 |

@@ -12,7 +12,7 @@
 
 | 项 | 事实 | 出处 |
 |---|---|---|
-| 训练底模 | `krea/Krea-2-Raw`（`Turbo` 是蒸馏快版，只用于验收出图）。第三方官方 cookbook 佐证：两变体**同 backbone**，只差采样配方——Turbo 蒸馏 **8 步 / guidance 1.0（无 CFG）**，Raw 是**非蒸馏 base、~52 步 / guidance ≈4.5** | `README.md:23`（本项目三模型表）；SGLang 官方 cookbook（2026-11-27 抓取，见 `sources.md`）；官方 model card 2026-11-27 抓取失败（`TypeError: fetch failed`）→ 权重细节仍 **`UNVERIFIED`** |
+| 训练底模 | `krea/Krea-2-Raw`（`Turbo` 是蒸馏快版，只用于验收出图）。第三方官方 cookbook 佐证：两变体**同 backbone**，只差采样配方——Turbo 蒸馏 **8 步 / guidance 1.0（无 CFG）**，Raw 是**非蒸馏 base、~52 步 / guidance ≈4.5（diffusers 语义；ai-toolkit yaml 写 5.5）** | `README.md:23`（本项目三模型表）；SGLang 官方 cookbook（2026-11-27 抓取，见 `sources.md`）；HF `krea/Krea-2-Raw` api.json（`gated: auto`，105,924 downloads / 1,482 likes / `license: other` / 55 文件，2026-11-27）→ 权重细节仍 **`UNVERIFIED`**（model card 需登录接受许可，HTTP 401） |
 | 推理默认（非训练） | 注册表里 krea2 指 `krea/Krea-2-Turbo`，8 步 / guidance 1.0 / 开量化 | `toolkit/models/registry.py:26` |
 | 加载器 | `Krea2Model(BaseModel)`，`arch = "krea2"` | `extensions_built_in/diffusion_models/krea2/krea2.py:144-145` |
 | 主网络 | 单流 MMDiT（`SingleStreamDiT`），宽 6144、28 层、48 头（KV 12 头）、patch 2、通道 16 | `krea2.py:66-80`（`KREA2_MMDIT_CONFIG`） |
@@ -73,7 +73,7 @@ config:
         name_or_path: krea/Krea-2-Raw
         arch: krea2                     # ← 必写，否则落到 sd1
         dtype: bf16
-      sample: { width: 1024, height: 1024, guidance_scale: 4.5, sample_steps: 52 }
+      sample: { width: 1024, height: 1024, guidance_scale: 5.5, sample_steps: 52 }   # yaml 写 5.5，生效 4.5
 ```
 
 ### 顶层与 process
@@ -221,7 +221,7 @@ config:
 | `datasets[].caption_dropout_rate` | `0.05` | 示例同值（`train_lora_flux_24gb.yaml:33`），防 caption 过拟合 |
 | `train.diff_output_preservation` | `false` 起步 | 种子建议开 `true` + `class person`；但需 trigger_word 且不能开 TE，先跑通再加。种子来源可信度：实测但非本仓库验证 |
 | `save.save_every` / `max_step_saves_to_keep` | `250` / `4` | 示例同值；2500 步能留 10 个中间档 |
-| `sample.sample_steps` / `sample.guidance_scale` | Raw：`52` / `4.5`；Turbo：`8` / `1.0` | 生效 CFG = 本值 − 1（`krea2.py:455`）→ 4.5 才是 3.5、1.0 才是 0（Turbo 无 CFG）。步数已由 SGLang cookbook 佐证（Raw ~52、Turbo 8）。**guidance 口径有分歧**：SGLang 写的是 diffusers 语义「Raw ≈4.5（1.0=关）」，若按 1:1 对齐则 yaml 应写 `5.5`；种子口径是「生效 CFG 3.5」→ yaml `4.5`。两读法并存，先取 4.5，需一次实拍确认，标 `UNVERIFIED` |
+| `sample.sample_steps` / `sample.guidance_scale` | Raw：`52` / **`5.5`（生效 4.5）**；Turbo：`8` / `1.0` | 生效 CFG = 本值 − 1（`krea2.py:455`）→ yaml `5.5` 才是 4.5、`1.0` 才是 0（Turbo 无 CFG）。**取值口径已由 PR #15（`3e3797e2`）定为 yaml `5.5` / 生效 4.5**：SGLang cookbook 写的是 diffusers 语义「Raw ≈4.5（1.0=关）」，对齐到 ai-toolkit 的减 1 口径就是 yaml 5.5；种子旧口径「生效 3.5」已弃用。步数由 SGLang 佐证（Raw ~52、Turbo 8）。**仍未经实拍**，标 `UNVERIFIED` |
 | `sample.width` / `height` | `1024` / `1024` | 原生分辨率 |
 
 ---
@@ -258,7 +258,7 @@ config:
 **B. 训练层（首轮跑完看）**
 
 1. 日志里 `create LoRA for Text Encoder: 0 modules` 是**预期**（Krea2 TE 无 LoRA 目标）；若你确实需要 TE 微调，这条路当前不存在。
-2. `sample` 样图：Raw 52 步 + 生效 CFG 3.5（即 `guidance_scale: 4.5`）；Turbo 8 步 + 生效 CFG 0（`guidance_scale: 1.0`）——两档都要出图，用来区分「LoRA 学坏了」还是「采样参数不对」。
+2. `sample` 样图：Raw 52 步 + `guidance_scale: 5.5`（生效 4.5）；Turbo 8 步 + 生效 CFG 0（`guidance_scale: 1.0`）——两档都要出图，用来区分「LoRA 学坏了」还是「采样参数不对」。取值按 PR #15（`3e3797e2`），未经实拍，`UNVERIFIED`。
 3. **三提示法定性**（种子 `:32`，标 `UNVERIFIED`，方法可用于三模型）：① 分布内（触发词 + 训练集同款）② 泛化（触发词 + 没见过场景/服装）③ 去触发词对照（应回到底座分布）。
 4. **过拟合判据**：连续 checkpoint 从「服装/背景被复刻」走向「姿势僵硬、只会训练集构图」时取更早的档（`max_step_saves_to_keep=4` 就为这个）。
 5. **步数 sanity**：每 epoch 样本数 = 张数 × `num_repeats` × `len(resolutions)`；对不上说明 resolution 拆数据集被误读。
@@ -269,10 +269,11 @@ config:
 
 | # | 缺口 | 现状 | 确认需要 |
 |---|---|---|---|
-| 1 | `krea/Krea-2-Raw` 是否为官方训练底座、参数量多少 | 变体性质与采样配方已由 SGLang cookbook 佐证（Raw = 非蒸馏 base，~52 步 / guidance ≈4.5；Turbo = 8 步蒸馏）；官方 model card 2026-11-27 抓取失败（`TypeError: fetch failed`），权重/参数量细节仍缺 | 能访问 HF 的网络，读 model card / config.json |
+| 1 | `krea/Krea-2-Raw` 是否为官方训练底座、参数量多少 | 变体性质与采样配方已由 SGLang cookbook 佐证（Raw = 非蒸馏 base，~52 步 / 生效 guidance 4.5 → yaml 5.5；Turbo = 8 步蒸馏）；HF `api.json` 确认存在、105,924 downloads、`gated: auto`、`license: other`、55 文件，但 **model card 需登录接受许可（HTTP 401）**，权重/参数量细节仍缺 | 接受许可后读 model card / `config.json`；或读 diffusers `Krea2Pipeline` 文档 |
 | 2 | `lr=1e-4`、`rank=32`、2500 步是否为 Krea2 最优 | 契约默认 + 第三方仓库二手校准（约 6★），两条独立但都非实测 | 对照训练：rank 16/32/64 × lr 5e-5/1e-4，固定种子出样图 |
 | 3 | `timestep_type: linear` vs `shift` 的训练差异 | 只有代码机制；`shift` 会走 `use_dynamic_shifting` 的 mu 插值 | 同数据两档对照，看收敛速度与细节/结构平衡 |
 | 4 | 24GB 是否必须 `quantize: true` | SGLang cookbook 给 DiT bf16 ≈24 GB（第三方部署实测）→ 24GB 单卡几乎必然需要量化/offload；训练侧（LoRA 梯度 + 激活 + 9B TE）仍未实测 | 一次 24GB 实跑，记录峰值显存 |
 | 5 | 量化 + `diff_output_preservation` 能否共存 | 量化模型 `can_merge_in=False`（`BaseSDTrainProcess.py:1985-2000`），DOP 依赖 base 输出对照 | 需读 DOP 的 loss 路径确认是否依赖 merge |
 | 6 | Krea2 上 `content_or_style` 的实际差别 | 只有 timestep 分布机制（`BaseSDTrainProcess.py:1231-1310`） | 两档各跑一次同数据 |
-| 7 | 社区 Krea2 实战（数据集规模/构成、失败模式） | 本轮只做源码 | Reddit / Civitai / HF 检索，需另开一轮 |
+| 7 | 社区 Krea2 实战（数据集规模/构成、失败模式） | 本轮补了社区来源，但**没有一条覆盖 Krea2**：HF 官方博客只讲 SDXL、kohya 只讲 SDXL/MOSS，Reddit 三条路径全部访问失败（见 `sources.md` §4） | 能访问 Reddit/Civitai 的出口，或人工摘录 Krea2 带图对照的帖子；否则只能等我们自己的实跑 |
+| 8 | Krea2 出图验收的 guidance 口径（yaml 5.5 / 生效 4.5） | PR #15（`3e3797e2`）依据 `krea2.py:455` 的减 1 定值，逻辑自洽但**未经实拍**；SGLang cookbook 的 4.5 是 diffusers 语义，两者换算后一致 | 一次 Raw 实拍：yaml `5.5` 与 `4.5` 各出一张，比「是否过曝/结构崩」 |
