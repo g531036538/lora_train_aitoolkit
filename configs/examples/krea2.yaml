@@ -7,7 +7,9 @@
 #   diff_output_preservation false  docs/models/krea2.md:222（先跑通再开；开了必须给 trigger_word 且不能开 TE）
 #   train_text_encoder false     docs/models/krea2.md:166（Krea2 的 TE 是静默空操作）
 #   bucket 能被 16 整除          krea2.py:204-206（VAE 8 × patch 2）
-# 采样：Raw 上 52 步 / guidance 4.5（docs/models/krea2.md:224，真生效 CFG = 本值 − 1，UNVERIFIED）；
+# 采样：Raw 上 52 步、要生效 4.5（docs/models/krea2.md:224）。
+#       ai-toolkit 生效值 = yaml 值 − 1（krea2.py:455），所以写 5.5；UNVERIFIED，
+#       若实拍证明不减 1 就改回 4.5（只动 _build_krea2 那一行）。
 #       出图验收走 Turbo：8 步 / guidance 1.0（toolkit/models/registry.py:26）
 job: extension
 config:
@@ -68,7 +70,7 @@ config:
       walk_seed: false
       sampler: flowmatch
       sample_steps: 52
-      guidance_scale: 4.5
+      guidance_scale: 5.5
     logging:
       log_every: 10
       use_wandb: false
