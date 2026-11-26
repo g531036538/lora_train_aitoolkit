@@ -164,7 +164,20 @@ def cmd_branch(a) -> None:
             raise
 
 
+def _read_message(a) -> str:
+    """提交信息优先从文件读。
+
+    本机 shell 的 locale 不是 UTF-8，中文经命令行参数传到 Python 时会变成乱码，
+    所以含中文的 message 一律写进文件再用 --message-file。
+    """
+    if getattr(a, "message_file", None):
+        with open(a.message_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return a.message
+
+
 def cmd_commit(a) -> None:
+    message = _read_message(a)
     head = _head_sha(a.branch)
     base_tree = api(f"/git/commits/{head}")["tree"]["sha"]
 
@@ -184,10 +197,10 @@ def cmd_commit(a) -> None:
     commit = api(
         "/git/commits",
         "POST",
-        {"message": a.message, "tree": new_tree["sha"], "parents": [head]},
+        {"message": message, "tree": new_tree["sha"], "parents": [head]},
     )
     api(f"/git/refs/heads/{a.branch}", "PATCH", {"sha": commit["sha"]})
-    print(f"committed {commit['sha'][:8]} to {a.branch}: {a.message}")
+    print(f"committed {commit['sha'][:8]} to {a.branch}")
 
 
 def cmd_pr(a) -> None:
@@ -204,6 +217,12 @@ def cmd_pr(a) -> None:
 
 
 def main() -> int:
+    try:  # 控制台 locale 不是 UTF-8，别让中文 print 直接把脚本打崩
+        sys.stdout.reconfigure(errors="replace")
+        sys.stderr.reconfigure(errors="replace")
+    except Exception:
+        pass
+
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -241,7 +260,8 @@ def main() -> int:
 
     p = sub.add_parser("commit")
     p.add_argument("--branch", required=True)
-    p.add_argument("--message", required=True)
+    p.add_argument("--message", default=None)
+    p.add_argument("--message-file", default=None, help="UTF-8 文件，中文提交信息用这个")
     p.add_argument("--files", nargs="+", required=True)
     p.add_argument("--root", default=None)
     p.set_defaults(func=cmd_commit)
@@ -255,6 +275,8 @@ def main() -> int:
     p.set_defaults(func=cmd_pr)
 
     a = ap.parse_args()
+    if a.cmd == "commit" and not (a.message or a.message_file):
+        raise SystemExit("commit 需要 --message 或 --message-file")
     a.func(a)
     return 0
 
