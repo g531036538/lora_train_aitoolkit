@@ -113,7 +113,7 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
     "model.moss-uncond-skip-layers": (
         "warn",
         "docs/models/moss_image.md:195：uncond_skip_layers 是推理侧 SLG 口径，"
-        "训练侧源码未见读取；缺了只是出图对照组不齐，不该拦训练",
+        "训练侧源码未见读取，只影响采样预览出图；判 error 会拦住合法训练配置",
     ),
     "model.quantize-on-sdxl": (
         "warn",
@@ -200,7 +200,8 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
     ),
     "datasets.resolution-parallel": (
         "warn",
-        "config_modules.py:1116-1152：resolution 是列表会把数据集拆成 ×N 份，成本翻倍",
+        "config_modules.py:1116-1152：resolution 是列表会把数据集拆成 ×N 份，成本翻倍。"
+        "永久报、不按档位数降噪——2 档就已经踩坑，默认配置自己就命中，正该响",
     ),
     "datasets.caption-dropout-high": (
         "warn",
@@ -412,8 +413,8 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
                 _problem(
                     "model.moss-uncond-skip-layers",
                     "MOSS-Image 训练用 Base 建议带 model.model_kwargs.uncond_skip_layers: [22]"
-                    "（官方 SLG 口径，docs/models/moss_image.md:195；推理侧生效），"
-                    "缺了出图对照组不齐",
+                    "（官方 SLG 口径，docs/models/moss_image.md:195；推理侧生效）。"
+                    "仅影响采样预览出图，不影响训练；缺了只是出图对照组不齐",
                 )
             )
 
@@ -578,8 +579,10 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
             problems.append(
                 _problem(
                     "datasets.resolution-parallel",
-                    f"datasets[{i}].resolution 有 {len(res)} 个值，数据集会被拆成 "
-                    f"{len(res)} 份训练（config_modules.py:1116-1152），步数与耗时同倍增加",
+                    f"datasets[{i}].resolution 给了 {len(res)} 档 = 数据集复制成 "
+                    f"{len(res)} 份（config_modules.py:1116-1152），"
+                    f"steps ≈ 张数 × num_repeats × {len(res)}；只覆盖更多尺寸，"
+                    f"不会让训练更快，训练量与耗时同倍增加",
                 )
             )
         for value in res:

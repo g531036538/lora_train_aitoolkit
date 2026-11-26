@@ -128,10 +128,11 @@ def test_krea2_uses_flowmatch_linear_not_sigmoid(cfgs: dict[TargetModel, dict]) 
     assert proc["train"]["diff_output_preservation"] is False
     assert proc["model"]["quantize"] is True
     assert proc["model"]["qtype"] == "qfloat8"
-    # docs/models/krea2.md:224：训练在 Raw 上采样，是 52 步 / guidance 4.5
+    # docs/models/krea2.md:224：训练在 Raw 上采样，52 步、要生效 4.5
     assert proc["sample"]["sampler"] == "flowmatch"
     assert proc["sample"]["sample_steps"] == 52
-    assert proc["sample"]["guidance_scale"] == 4.5
+    # ai-toolkit 生效值 = yaml 值 − 1（krea2.py:455），所以写 5.5
+    assert proc["sample"]["guidance_scale"] == 5.5
 
 
 def test_moss_uses_base_with_uncond_skip_layers(cfgs: dict[TargetModel, dict]) -> None:
@@ -219,6 +220,8 @@ def test_moss_uncond_skip_layers_is_only_a_warning(cfgs: dict[TargetModel, dict]
     assert hits, [p.code for p in detailed]
     assert hits[0].severity == "warn"
     assert "uncond_skip_layers" in hits[0].message
+    # 主管要求：说清楚它只影响出图预览，不影响训练
+    assert "不影响训练" in hits[0].message
     assert validate_config(cfg, target) == []
 
 
@@ -262,6 +265,27 @@ def test_resolution_not_aligned_is_only_a_warning(cfgs: dict[TargetModel, dict])
 
     assert "datasets.resolution-alignment" in _warn_codes(cfg, target)
     assert validate_config(cfg, target) == []
+
+
+def test_resolution_parallel_explains_the_multiplier(cfgs: dict[TargetModel, dict]) -> None:
+    """N 档分辨率 = 数据集复制 N 份；文案要把乘数讲明白，且 2 档就要报。"""
+    target = TargetModel.SDXL
+    cfg = copy.deepcopy(cfgs[target])
+    _proc(cfg)["datasets"][0]["resolution"] = [768, 1024]
+
+    hits = [p for p in validate_config_detailed(cfg, target) if p.code == "datasets.resolution-parallel"]
+    assert len(hits) == 1
+    message = hits[0].message
+    assert "×" in message or "份" in message
+    assert "num_repeats" in message
+    assert "2" in message  # 把 N 这个实际档位数写进去
+    # 默认三档也要报，不许只在 >2 档时才报
+    default_hits = [
+        p
+        for p in validate_config_detailed(cfgs[target], target)
+        if p.code == "datasets.resolution-parallel"
+    ]
+    assert len(default_hits) == 1
 
 
 def test_caption_dropout_high_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:

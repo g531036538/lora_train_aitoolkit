@@ -232,10 +232,12 @@ def _build_krea2(proc: dict[str, Any], plan: TrainingPlan) -> None:
     * ``diff_output_preservation`` 从 ``false`` 起步（docs/models/krea2.md:222）：
       种子建议开 ``true``，但需要 trigger_word 且不能开 TE，先跑通再加。
     * ``vae_dtype: float32``（docs/models/krea2.md:218，预防性设置，可选项）。
-    * 采样 **52 步 / guidance 4.5**（docs/models/krea2.md:15,224）：训练在 Raw
-      （非蒸馏）上采样，不是 Turbo 的 8 步 / 1.0。注意生效 CFG = 本值 − 1
-      （krea2.py:455），4.5 实际生效 3.5。guidance 口径两读法并存
-      （另说 diffusers 语义应写 5.5），**UNVERIFIED**，等一次实拍确认。
+    * 采样 **52 步 / guidance 5.5**（docs/models/krea2.md:15,224）：训练在 Raw
+      （非蒸馏）上采样，不是 Turbo 的 8 步 / 1.0。
+    * guidance 要换算：ai-toolkit 生效值 = ``max(0, yaml 值 − 1.0)``
+      （krea2.py:455），所以要生效 4.5 就得写 5.5。registry 里 Turbo 写 1.0、
+      生效 0，正好自洽这条读法。换算口径仍 **UNVERIFIED**——若实拍证明
+      ai-toolkit 不减 1，只改 ``_build_krea2`` 里那一行，回到 4.5。
     """
     proc["train"].update(
         {
@@ -259,7 +261,9 @@ def _build_krea2(proc: dict[str, Any], plan: TrainingPlan) -> None:
         {
             "sampler": "flowmatch",  # 必须与 train.noise_scheduler 一致
             "sample_steps": 52,  # docs/models/krea2.md:224（Raw 口径）
-            "guidance_scale": 4.5,  # docs/models/krea2.md:224；UNVERIFIED 口径
+            # docs/models/krea2.md:224 要的是生效 4.5；ai-toolkit 生效值 = 本值 − 1
+            # （krea2.py:455），所以写 5.5。UNVERIFIED：实拍证明不减 1 就改回 4.5。
+            "guidance_scale": 5.5,
         }
     )
 

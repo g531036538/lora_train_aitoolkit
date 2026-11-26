@@ -152,7 +152,7 @@ _ACCEPTANCE: dict[TargetModel, AcceptancePlan] = {
             shift=None,
             negative="",
             # 出图验收走 Turbo：8 步 / guidance 1.0（toolkit/models/registry.py:26）。
-            # Raw 上的训练期采样是 52 步 / 4.5，见 docs/models/krea2.md:224（UNVERIFIED）。
+            # Raw 上的训练期采样是 52 步、生效 4.5（yaml 里写 5.5），见 docs/models/krea2.md:224（UNVERIFIED）。
             source="toolkit/models/registry.py:26 + docs/models/krea2.md:224",
         ),
         prompts=_THREE_PROMPTS,
