@@ -1,9 +1,16 @@
-"""真实后端适配器。
+"""Caption 后端实现。
 
-本机装不了 onnxruntime/transformers，所以目前只提供 OpenAI 兼容的 HTTP 后端；
-它的配置全部来自环境变量，见 ``openai_http``。
+本机不装 onnxruntime/transformers，所以只提供 OpenAI 兼容的 HTTP 后端；
+WD/本地 VLM 后端在没有依赖时不会假装存在，见 ``pipeline.list_backends()``。
 """
 
-from .openai_http import OpenAIVisionBackend
+
+def __getattr__(name: str):
+    if name == "OpenAIVisionBackend":
+        from .openai_http import OpenAIVisionBackend
+
+        return OpenAIVisionBackend
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = ["OpenAIVisionBackend"]
