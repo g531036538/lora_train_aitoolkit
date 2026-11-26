@@ -1,0 +1,24 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+
+# 训练素材与产物，绝不入仓
+datasets/
+images/
+outputs/
+output/
+*.safetensors
+*.ckpt
+*.zip
+
+# 界面缓存
+app/web/.cache/
+.gradio/
+
+# 系统
+.DS_Store
+Thumbs.db
