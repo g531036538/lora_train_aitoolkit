@@ -57,6 +57,9 @@ class CaptionContext:
     # language 定案：训练用打标词一律英文，.txt 内容不随它变；zh 只影响给人看的
     # 说明文字（界面预览 / checks message / 错误说明）。要中文训练就新增 target，
     # 不要复用 language。触发词是拉丁串，语言开关不碰它。
+    # 推论（硬约束）：任何 styler 的 render() 输出必须是纯 ASCII。段名、占位词、
+    # 分隔符都算输出的一部分；汉字进 .txt 会被 BPE 切成多个碎片，污染 token 分布。
+    # 中文预览是界面层的翻译，不落盘。
 
 @dataclass(frozen=True)
 class BackendCaps:
