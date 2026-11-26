@@ -26,23 +26,13 @@ from ._text import (
     strip_identity_clauses,
 )
 
-_LABELS: dict[str, dict[str, str]] = {
-    "en": {
-        "object": "Object",
-        "text": "In-image text",
-        "appearance": "Appearance",
-        "composition": "Composition",
-        "none": "none",
-        "missing": "not described",
-    },
-    "zh": {
-        "object": "对象",
-        "text": "图内文字",
-        "appearance": "外观",
-        "composition": "构图",
-        "none": "无",
-        "missing": "未描述",
-    },
+_LABELS: dict[str, str] = {
+    "object": "Object",
+    "text": "In-image text",
+    "appearance": "Appearance",
+    "composition": "Composition",
+    "none": "none",
+    "missing": "not described",
 }
 
 _ROLE_ALIASES: dict[str, str] = {
@@ -248,17 +238,15 @@ def _format_text(
     texts: list[dict[str, Any]],
     appearance_text: str,
     composition_text: str,
-    language: str,
 ) -> str:
-    labels = _LABELS.get(language, _LABELS["en"])
-    lines = [f"{labels['object']}: {object_text}", f"{labels['text']}:"]
+    lines = [f"{_LABELS['object']}: {object_text}", f"{_LABELS['text']}:"]
     if texts:
         for item in texts:
             lines.append(f"{_quote(item['text'])} (role: {item['role']})")
     else:
-        lines[-1] = f"{labels['text']}: {labels['none']}"
-    lines.append(f"{labels['appearance']}: {appearance_text}")
-    lines.append(f"{labels['composition']}: {composition_text}")
+        lines[-1] = f"{_LABELS['text']}: {_LABELS['none']}"
+    lines.append(f"{_LABELS['appearance']}: {appearance_text}")
+    lines.append(f"{_LABELS['composition']}: {composition_text}")
     return "\n".join(lines)
 
 
@@ -304,8 +292,7 @@ class MossPreciseStyler:
                 text, ctx, allow_quoted_text=True
             )
 
-        labels = _LABELS.get(ctx.language, _LABELS["en"])
-        missing = labels["missing"]
+        missing = _LABELS["missing"]
         object_text = _apply_trigger(object_text, ctx.trigger, missing)
         appearance_text = appearance_text or missing
         composition_text = composition_text or missing
@@ -324,7 +311,6 @@ class MossPreciseStyler:
             texts,
             appearance_text,
             composition_text,
-            ctx.language,
         )
 
 
