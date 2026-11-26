@@ -127,8 +127,9 @@ def cmd_issue_comment(a) -> None:
 
 def cmd_issue_create(a) -> None:
     body = _read_body(a)
+    title = _read_text(a.title, getattr(a, "title_file", None))
     labels = [s for s in (a.labels or "").split(",") if s]
-    payload = {"title": a.title, "body": body}
+    payload = {"title": title, "body": body}
     if labels:
         payload["labels"] = labels
     r = api("/issues", "POST", payload)
@@ -162,6 +163,16 @@ def cmd_branch(a) -> None:
             print(f"branch {a.name} already exists")
         else:
             raise
+
+
+def _read_text(value, path) -> str:
+    """标题等短文本也支持从文件读，理由同 _read_message。"""
+    if path:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    if value is None:
+        raise SystemExit("缺少文本参数（可用 --*-file 指定 UTF-8 文件）")
+    return value
 
 
 def _read_message(a) -> str:
@@ -205,10 +216,11 @@ def cmd_commit(a) -> None:
 
 def cmd_pr(a) -> None:
     body = _read_body(a)
+    title = _read_text(a.title, getattr(a, "title_file", None))
     r = api(
         "/pulls",
         "POST",
-        {"title": a.title, "head": a.head, "base": a.base, "body": body},
+        {"title": title, "head": a.head, "base": a.base, "body": body},
     )
     print(f"PR #{r['number']}: {r['html_url']}")
 
@@ -247,7 +259,8 @@ def main() -> int:
     p.set_defaults(func=cmd_issue_comment)
 
     p = sub.add_parser("issue-create")
-    p.add_argument("--title", required=True)
+    p.add_argument("--title", default=None)
+    p.add_argument("--title-file", default=None)
     p.add_argument("--body", default=None)
     p.add_argument("--body-file", default=None)
     p.add_argument("--labels", default=None)
@@ -269,7 +282,8 @@ def main() -> int:
     p = sub.add_parser("pr")
     p.add_argument("--head", required=True)
     p.add_argument("--base", default="main")
-    p.add_argument("--title", required=True)
+    p.add_argument("--title", default=None)
+    p.add_argument("--title-file", default=None)
     p.add_argument("--body", default=None)
     p.add_argument("--body-file", default=None)
     p.set_defaults(func=cmd_pr)

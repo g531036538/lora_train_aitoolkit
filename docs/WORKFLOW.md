@@ -79,11 +79,22 @@ python -m pytest -q
 
 ## 4. 提交
 
+**中文提交信息必须走 `--message-file`。** 本机控制台 locale 不是 UTF-8，中文经命令行参数传给 Python 会变成乱码并永久写进提交历史。
+
 ```bash
+# 先把提交信息写进 UTF-8 文件
+cat > .msg <<'EOF'
+feat(caption): Krea2 styler 丢掉身份词，保留变化词
+
+身份交给触发词；写进打标词会让换装时脸跟着漂。
+EOF
+
 python tools/gh.py commit --branch feat/caption-krea2-styler \
-  --message "feat(caption): Krea2 styler 丢掉身份词，保留变化词" \
+  --message-file .msg \
   --files loraforge/caption/stylers/krea2.py tests/test_caption_styler_krea2.py
 ```
+
+纯英文信息用 `--message` 也可以。Issue 正文同理：中文一律 `--body-file`。
 
 `--files` 只列你**自己写集内**的文件。跨写集 = 打回。
 
@@ -140,3 +151,15 @@ python -m pytest -q
 pip install -e ".[ui,dev]"
 python -m app.ui          # http://127.0.0.1:7861
 ```
+
+## 9. 机械闸门
+
+GitHub Actions **暂时用不了**：当前 PAT 没有 `Workflows` 权限，往 `.github/workflows/` 下写文件会被 403 拒绝（`Resource not accessible by personal access token`）。CI 配置已写好放在本地，等权限到位再推。
+
+所以合并前的机械闸门由主管在本地执行：
+
+```bash
+python -m pytest -q          # 全绿才合并
+```
+
+成员在 PR 里必须贴自己的 pytest **真实输出**；主管合并前会在 PR 分支上重跑一遍，对不上就打回重做。
