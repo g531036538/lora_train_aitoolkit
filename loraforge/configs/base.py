@@ -281,13 +281,17 @@ def _build_moss(proc: dict[str, Any], plan: TrainingPlan) -> None:
       shift 5（src/pipeline.py:17 DEFAULT_SHIFT=5.0，经 ``sample_shift`` 透传，
       moss_image.py:184）。MOSS 不像 Krea2 那样减 1（moss_image.py:403 直接传）。
     * ``vae_dtype: float32``（docs/models/moss_image.md:264，官方 VAE fp32 口径）。
-    * ``timestep_type`` 不写：调研文档没有给出口径，走 ai-toolkit 默认
-      （toolkit/config_modules.py:560，默认 ``sigmoid``），避免再搬错一次。
+    * ``timestep_type: shift``（docs/models/moss_image.md:179）：MOSS 训练调度器
+      ``shift=5.0`` 且 ``use_dynamic_shifting=False``，采样也是 ``sample_shift=5.0``，
+      训练/推理同一条 sigma 表。备选 ``linear``，两档都需实测，标 ``UNVERIFIED``。
     """
     proc["train"].update(
         {
             "noise_scheduler": "flowmatch",
             "train_text_encoder": False,
+            # docs/models/moss_image.md:179；shift 分支用固定 self.shift=5.0
+            # （custom_flowmatch_sampler.py:145-174），实测前标 UNVERIFIED。
+            "timestep_type": "shift",
         }
     )
     proc["model"] = {

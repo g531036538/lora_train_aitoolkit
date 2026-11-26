@@ -19,6 +19,10 @@
 判级理由写在下方 ``_REGISTRY`` 里，紧挨着 code；出处指向
 ``ai-toolkit`` 源码（本地镜像 ``.scratch/src/ai-toolkit-main``）与阿研的
 ``docs/models/<target>.md``。
+
+判级经过 ``docs/models/_review-severity.md``（阿研，2026-11-27）逐条审核：
+48 条里 34 条同意，14 条按审核意见改过；改的那 14 条在 code 旁边标了
+``[review #n]``，方便回溯。
 """
 
 from __future__ import annotations
@@ -54,17 +58,40 @@ _CAPTION_DROPOUT_MAX = 0.15
 _MOSS_MAX_TEXT_LENGTH = 4096
 
 # LoRA 的 lr 量级上限：再高基本是把权重往坏里推
-# 出处：docs/models/sdxl.md:212-213 契约默认 1e-4；无源码硬约束，属工程判断
-_LR_MAX = 1e-2
+# 出处：docs/models/sdxl.md:212-213 契约默认 1e-4；无源码硬约束，属工程判断。
+# [review #18] 阈值压到 5e-3：1e-2 时「正好等于 1e-2」不响，边界很难解释。
+_LR_MAX = 5e-3
 
 # alpha/rank 的合理区间（有效学习率 ≈ lr × alpha/rank）
-# 出处：docs/models/sdxl.md:213（契约默认 alpha == rank）
-_RANK_ALPHA_MIN = 0.5
-_RANK_ALPHA_MAX = 2.0
+# 出处：docs/models/sdxl.md:213（契约默认 alpha == rank）；kohya 官方 SDXL 示例 32/16 = 0.5。
+# [review #1] 原区间 [0.5, 2.0] 会把 ai-toolkit 自己的默认值（rank 4 / alpha 1.0 = 0.25）
+# 判成 error（config_modules.py:187-191），属假阳性。放宽到 [0.25, 4.0] 并降为 warn：
+# ratio 偏小只是有效学习率变小、训练偏保守，不是「不可用」。
+_RANK_ALPHA_MIN = 0.25
+_RANK_ALPHA_MAX = 4.0
 
 # timestep_type 白名单
-# 出处：toolkit/samplers/custom_flowmatch_sampler.py:127-216
-_TIMESTEP_TYPES = ("sigmoid", "linear", "lognorm_blend", "next_sample", "weighted", "one_step")
+# 出处：toolkit/samplers/custom_flowmatch_sampler.py:127-216（linear / weighted / sigmoid /
+#       shift / flux_shift / lumina2_shift，见 :145）；
+#       jobs/process/BaseSDTrainProcess.py:1181-1261（one_step / two_step / four_step /
+#       eight_step / next_sample）。
+# [review #2] 原表漏了 shift / flux_shift / lumina2_shift 三个源码明确处理的合法分支——
+# 我们自己文档给的 MOSS `timestep_type: shift`（docs/models/moss_image.md:179）会被判
+# 「未知」。next_sample / one_step 保留，它们确实有分支。
+_TIMESTEP_TYPES = (
+    "sigmoid",
+    "linear",
+    "shift",
+    "flux_shift",
+    "lumina2_shift",
+    "lognorm_blend",
+    "next_sample",
+    "weighted",
+    "one_step",
+    "two_step",
+    "four_step",
+    "eight_step",
+)
 
 # 已知 qtype 家族
 # 出处：toolkit/util/ostris_quant.py:185-211 + convrot_quant.py:54-56、
@@ -79,6 +106,11 @@ _KNOWN_QTYPE = re.compile(
 # 采样尺寸 / 分辨率都得能被 8 整除（VAE 下采样）
 # 出处：toolkit/stable_diffusion_model.py:364-372 等，bucket 的公共因子
 _SIZE_MULTIPLE = 8
+
+# flow 系（krea2 / moss）的采样尺寸要按 bucket 整除量判
+# [review #19] krea2.py:204-206、moss_image.py:207-208 的 get_bucket_divisibility() 都是 16，
+# 只查 8 的倍数放过了一半会被 padding 的尺寸。
+_FLOW_SIZE_MULTIPLE = 16
 
 
 # ---------------------------------------------------------------------------
@@ -99,16 +131,26 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
     "model.missing": ("error", "没有 model 段连底座都加载不了"),
     "model.name-or-path": ("error", "toolkit/config_modules.py:675-676 直接拒绝空路径"),
     "model.family-mismatch": (
-        "error",
-        "路径与 target 不属于同一家族 = 拿错底座，几小时训练全白跑",
+        "warn",
+        # [review #11] 判定靠 name_or_path 子串（config_modules.py:267-271），本地权重
+        # `sd_xl_base_1.0.safetensors`（含 sd_xl 不含 sdxl）、`moss_image_base.safetensors`
+        # 都会被误杀。子串启发式不该有拦截权，降为 warn。
+        "路径与 target 看起来不是同一家族，可能拿错底座；但子串启发式会误杀本地"
+        "权重名（如 sd_xl_base_1.0.safetensors），只提示不拦",
     ),
     "model.arch": (
         "error",
-        "toolkit/config_modules.py:809-831：arch 不匹配会落回 sd1，整条训练路径全错",
+        # [review #6] 条件放宽：config_modules.py:809-831 允许由 is_xl 推出 sdxl，
+        # 官方 flux 示例只写 is_flux；SDXL 同理。arch 与家族标志都缺才 error（会落 sd1）。
+        "toolkit/config_modules.py:809-831：arch 不匹配会落回 sd1，整条训练路径全错；"
+        "但 is_xl: true 可以推出 sdxl，两者都缺才拦",
     ),
     "model.arch-suffix": (
-        "error",
-        "toolkit/config_modules.py:776-778：描号后面会被 split 掉，等于静默丢变体",
+        "warn",
+        # [review #12] config_modules.py:776-778 是通用逻辑，krea2:raw、sdxl:foo 的 tag
+        # 一样被丢弃；丢 tag 不改变训练路径（变体由 name_or_path + model_kwargs 决定）。
+        "toolkit/config_modules.py:776-778：冒号后面会被 split 掉，等于静默丢变体；"
+        "属配置卫生问题，不改变训练路径",
     ),
     "model.moss-uncond-skip-layers": (
         "warn",
@@ -135,7 +177,13 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
     ),
     # -- 训练段 -----------------------------------------------------------
     "train.missing": ("error", "没有 train 段训不了"),
-    "train.required-empty": ("error", "steps/lr/batch_size/noise_scheduler 缺一个就跑不起来"),
+    "train.required-empty": (
+        "warn",
+        # [review #7] 四个键全有默认值（noise_scheduler ddpm :383、steps 1000 :386、
+        # lr 1e-6 :387、batch_size 1 :399），省略即走默认、配置能跑；只拦显式空值/非法值。
+        "steps/lr/batch_size/noise_scheduler 写成了空值或 None；省略会走默认，"
+        "显式空值才拦（config_modules.py:383,386,387,399）",
+    ),
     "train.noise-scheduler-not-flowmatch": (
         "error",
         "BaseSDTrainProcess.py:1173-1210：只有 flowmatch 才走 set_train_timesteps，"
@@ -150,17 +198,22 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
         "SDXL 用其它采样器也能跑，只是偏离默认口径（config_modules.py:383）",
     ),
     "train.timestep-type-sigmoid": (
-        "error",
-        "FLUX 的 sigmoid 口径搬到 Krea2 上必坏（krea2.py:159 is_flow_matching）",
+        "warn",
+        # [review #3] custom_flowmatch_sampler.py:131-144 只是 timestep 分布不同（中心 t≈500），
+        # kohya 的 MOSS 文档也只说「与预训练分布差很多」，仍能训；拦成 error 属假阳性。
+        "timestep_type: sigmoid 是 FLUX 口径，flow 系（krea2/moss）推荐 linear 或 shift；"
+        "能训，但 timestep 分布偏中心，效果打折",
     ),
     "train.timestep-type-unknown": (
         "error",
-        "custom_flowmatch_sampler.py:127-216：白名单外会被当成未知分支，等于没设",
+        "custom_flowmatch_sampler.py:127-216 + BaseSDTrainProcess.py:1181-1261："
+        "白名单外会被当成未知分支，等于没设",
     ),
     "train.timestep-type-not-linear": (
-        "error",
-        "docs/models/krea2.md:163：白名单内也行，但 Krea2 训练口径是 linear，"
-        "sigmoid 以外的分支属未验证路线",
+        "warn",
+        # [review #4] 实现注释自己写「白名单内但不是 linear：能跑，口径偏了」，登记表给
+        # error 属自相矛盾（docs/models/krea2.md:163 只是推荐起点）。
+        "Krea2 的推荐口径是 linear，当前取值属未验证路线；能跑，只是口径偏了",
     ),
     "train.diff-output-preservation-without-trigger": (
         "error",
@@ -171,28 +224,44 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
         "docs/models/sdxl.md 检查表第 7 条：preservation 与训 TE 语义冲突",
     ),
     "train.text-encoder": (
-        "error",
-        "Krea2 是静默空操作、MOSS 官方要求冻结（lora_special.py:284,678-680），"
-        "开了要么白搭要么违反官方口径",
+        "warn",
+        # [review #5] lora_special.py:284,678-680：krea2/moss 的 Qwen TE 建出 0 个 LoRA，
+        # 只打印 skipped、不抛错；MOSS 官方要求冻结。属「白搭」不属「白跑」。
+        "krea2/moss 开了 train_text_encoder 也不会生效（TE 侧建 0 个 LoRA，"
+        "只打印 skipped，不抛错）；MOSS 官方要求 TE 冻结，请保持 false",
     ),
     "train.steps": ("error", "步数非正数，循环根本不成立"),
     "train.lr": ("error", "学习率非正数训不动"),
     "train.lr-too-large": (
         "error",
-        "lr ≥ 1e-2 基本直接把 LoRA 推废，几小时白跑（阈值属工程判断，见 _LR_MAX）",
+        # [review #18] 阈值属工程判断，从 1e-2 压到 5e-3（1e-2 时边界不响）。
+        "lr ≥ 5e-3 基本直接把 LoRA 推废，几小时白跑（经验值，见 _LR_MAX）",
     ),
     # -- LoRA 维度 ---------------------------------------------------------
     "network.rank": ("error", "rank 非正数，LoRA 层建不出来"),
     "network.alpha": ("error", "alpha 非正数，缩放系数非法"),
     "network.rank-alpha-ratio": (
-        "error",
-        "alpha/rank 失配 = 有效学习率错一个量级，训出来的东西不可用",
+        "warn",
+        # [review #1] alpha/rank 只影响有效学习率（lr × alpha/rank）；ai-toolkit 默认
+        # rank 4 / alpha 1.0 = 0.25，判 error 是假阳性。
+        "alpha/rank 偏离常见区间：有效学习率 = lr × alpha/rank，偏离只是训练偏保守或偏激进，"
+        "不是不可用",
     ),
     # -- 数据集 -----------------------------------------------------------
     "datasets.missing": ("error", "没有数据集就没图可训"),
     "datasets.item": ("error", "数据集条目不是 dict，解析器会抛"),
-    "datasets.folder-path": ("error", "folder_path 为空读不到图"),
-    "datasets.resolution": ("error", "resolution 必须是非空列表（config_modules.py:899）"),
+    "datasets.folder-path": (
+        "error",
+        # [review #10] config_modules.py:935 另定义 dataset_path，:1127 把两者一起拆分；
+        # 只认 folder_path 会拦掉合法写法。
+        "folder_path（或别名 dataset_path）为空读不到图（config_modules.py:935,1127）",
+    ),
+    "datasets.resolution": (
+        "error",
+        # [review #9] 原出处 :899 写错；config_modules.py:959 明确 resolution: int 默认 512，
+        # 单个 int 是合法值，:1122-1152 只在 list 时复制数据集。
+        "resolution 必须是正整数或非空列表（config_modules.py:959 默认为 int）",
+    ),
     "datasets.resolution-value": ("error", "非正整数分辨率算不出 bucket"),
     "datasets.resolution-alignment": (
         "warn",
@@ -200,7 +269,10 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
     ),
     "datasets.resolution-parallel": (
         "warn",
-        "config_modules.py:1116-1152：resolution 是列表会把数据集拆成 ×N 份，成本翻倍。"
+        # [review #15] 原文案「训练量与耗时同倍增加」不准确：steps 固定时训练时长不变，
+        # 变的是每张图的曝光次数（等效 epochs 除以 N）。
+        "config_modules.py:1116-1152：resolution 是列表会把数据集拆成 ×N 份。"
+        "同样步数下每张图被看到的次数变少；要等价效果需把 steps ×N。"
         "永久报、不按档位数降噪——2 档就已经踩坑，默认配置自己就命中，正该响",
     ),
     "datasets.caption-dropout-high": (
@@ -211,11 +283,24 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
     "sample.missing": ("error", "没有 sample 段训练进程初始化时会抛"),
     "sample.sampler-mismatch": (
         "warn",
-        "出图口径与训练调度器不一致而已；Krea2 甚至不读 sample.sampler（krea2.py:175）",
+        # [review #13] krea2.py:411-467、moss_image.py:371-411 的 generate_single_image
+        # 不读 gen_config.sampler，且 flow 系 train.noise_scheduler 必为 flowmatch →
+        # 恒响的噪音。只在 SDXL 保留（sample.sampler 会真的影响出图口径）。
+        "SDXL 的 sample.sampler 与 train.noise_scheduler 不一致，出图口径会对不上；"
+        "krea2/moss 不读该键，不校验",
     ),
     "sample.prompts": ("warn", "没有采样提示词 = 看不到拐点，但训练能跑"),
-    "sample.size": ("error", "width/height/sample_steps 非法会让采样直接失败"),
-    "sample.size-alignment": ("error", "尺寸不能被 8 整除，VAE 下采样对不上"),
+    "sample.size": (
+        "error",
+        # [review #8] SampleConfig 的 width/height 默认 512、sample_steps 默认 20
+        # （config_modules.py:82-125），省略是合法写法。
+        "width/height/sample_steps 写了非正数，会让采样直接失败（省略则走默认）",
+    ),
+    "sample.size-alignment": (
+        "error",
+        # [review #19] flow 系按 get_bucket_divisibility()=16 判，SDXL 按 8 判。
+        "尺寸不能被 bucket 整除量（flow 系 16 / SDXL 8）整除，VAE 下采样对不上",
+    ),
 }
 
 
@@ -343,20 +428,40 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
         )
 
     arch = str(model.get("arch") or "")
+    # ai-toolkit 读 arch 时会先按冒号截断（config_modules.py:776-778），所以
+    # ``moss_image:base`` 实际落到 ``moss_image``，主干是对的；只由下面的
+    # model.arch-suffix 提示 tag 丢失。
+    arch_base = arch.split(":", 1)[0]
     expected_arch = {
         TargetModel.SDXL: "sdxl",
         TargetModel.KREA2: "krea2",
         TargetModel.MOSS: "moss_image",
     }[t]
-    if arch != expected_arch:
-        problems.append(_problem("model.arch", f"model.arch 应为 {expected_arch!r}，实际 {arch!r}"))
-    if arch == "moss_image:base":
+    if arch_base != expected_arch:
+        # [review #6] config_modules.py:809-831 允许由 is_xl 推出 sdxl（官方 flux 示例
+        # 只写 is_flux: true）；家族标志正确时不报，两者都缺才拦（会落 sd1）。
+        implied_by_flag = arch == "" and t is TargetModel.SDXL and bool(model.get("is_xl"))
+        if not implied_by_flag:
+            if arch:
+                hint = ""
+            elif t is TargetModel.SDXL:
+                hint = "；也可以省掉 arch 但显式写 is_xl: true"
+            else:
+                hint = "；缺失会落回 sd1，训练路径全错"
+            problems.append(
+                _problem(
+                    "model.arch",
+                    f"model.arch 应为 {expected_arch!r}，实际 {arch!r}{hint}",
+                )
+            )
+    if ":" in arch:
+        # [review #12] config_modules.py:776-778 对全 target 都是截断逻辑，不改变训练路径。
         problems.append(
             _problem(
                 "model.arch-suffix",
-                "model.arch 不能写 moss_image:base——冒号后会被截断成 moss_image"
-                "（toolkit/config_modules.py:776-778）；Base 变体靠 name_or_path + "
-                "model_kwargs.uncond_skip_layers 表达",
+                f"model.arch={arch!r} 带冒号：冒号后会被截断成 {arch.split(':')[0]!r}"
+                "（toolkit/config_modules.py:776-778），变体 tag 静默丢失；"
+                "变体应由 name_or_path + model_kwargs 表达",
             )
         )
 
@@ -370,7 +475,10 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
         )
 
     qtype = model.get("qtype")
-    if qtype is not None and not _KNOWN_QTYPE.match(str(qtype)):
+    # [review #17] 量化关着的时候查 qtype 家族是噪音，只在真正会用到时校验。
+    if (model.get("quantize") or model.get("quantize_te")) and (
+        qtype is not None and not _KNOWN_QTYPE.match(str(qtype))
+    ):
         problems.append(
             _problem(
                 "model.qtype-unknown",
@@ -408,13 +516,14 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
             skip_list = [
                 int(x) for x in skip if isinstance(x, (int, float)) and not isinstance(x, bool)
             ]
-        if 22 not in skip_list:
+        # [review #16] 只在键存在且不含 22 时提示；缺省不算错（训练侧源码根本没读它）。
+        if "uncond_skip_layers" in kwargs and 22 not in skip_list:
             problems.append(
                 _problem(
                     "model.moss-uncond-skip-layers",
-                    "MOSS-Image 训练用 Base 建议带 model.model_kwargs.uncond_skip_layers: [22]"
-                    "（官方 SLG 口径，docs/models/moss_image.md:195；推理侧生效）。"
-                    "仅影响采样预览出图，不影响训练；缺了只是出图对照组不齐",
+                    f"MOSS-Image 的 model.model_kwargs.uncond_skip_layers={skip!r} 不含 22："
+                    "官方 SLG 口径建议 22（22/24/26 均可，docs/models/moss_image.md:195）。"
+                    "这是推理侧参数，不影响训练，只是采样预览的对照组会不齐",
                 )
             )
 
@@ -424,9 +533,10 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
         problems.append(_problem("train.missing", "缺少 train 段"))
         train = {}
 
+    # [review #7] 四个键都有默认值，省略合法；只有显式写空/None 才提示。
     for key in ("steps", "lr", "batch_size", "noise_scheduler"):
-        if train.get(key) in (None, ""):
-            problems.append(_problem("train.required-empty", f"train.{key} 为空"))
+        if key in train and train.get(key) in (None, ""):
+            problems.append(_problem("train.required-empty", f"train.{key} 显式写成了空值"))
 
     noise = train.get("noise_scheduler")
     if t is TargetModel.SDXL:
@@ -454,29 +564,34 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
             )
         )
 
-    if t is TargetModel.KREA2:
+    # timestep_type：flow 系（krea2 / moss）才走 set_train_timesteps，两个模型都要查。
+    # [review #14] 原实现只在 KREA2 分支里跑，MOSS 完全没校验——MOSS 恰恰最需要它
+    # （预训练 logit-normal，docs/models/moss_image.md:179）；非法值会在
+    # custom_flowmatch_sampler.py:230 抛 ValueError，属真硬错。
+    if t in (TargetModel.KREA2, TargetModel.MOSS):
         ttype = train.get("timestep_type")
-        if ttype == "sigmoid":
-            problems.append(
-                _problem(
-                    "train.timestep-type-sigmoid",
-                    "Krea2 的 timestep_type 不能是 sigmoid——那是 FLUX 的口径，"
-                    "会训坏；必须 linear",
-                )
-            )
-        elif ttype not in _TIMESTEP_TYPES:
+        if ttype is not None and ttype not in _TIMESTEP_TYPES:
             problems.append(
                 _problem(
                     "train.timestep-type-unknown",
-                    f"Krea2 的 timestep_type={ttype!r} 不在白名单 {_TIMESTEP_TYPES} 里",
+                    f"{t.value} 的 timestep_type={ttype!r} 不在白名单 "
+                    f"{_TIMESTEP_TYPES} 里（custom_flowmatch_sampler.py:230 会抛 ValueError）",
                 )
             )
-        elif ttype != "linear":
-            # 白名单内但不是 linear：能跑，口径偏了
+        elif ttype == "sigmoid":
+            problems.append(
+                _problem(
+                    "train.timestep-type-sigmoid",
+                    f"{t.value} 的 timestep_type 是 sigmoid（FLUX 口径）：能训，但 timestep "
+                    "分布偏中心，与预训练分布差得多，效果打折",
+                )
+            )
+        elif t is TargetModel.KREA2 and ttype is not None and ttype != "linear":
+            # 白名单内但不是 linear：能跑，口径偏了（实现注释自己也这么写）
             problems.append(
                 _problem(
                     "train.timestep-type-not-linear",
-                    f"Krea2 的 timestep_type 应为 linear，实际 {ttype!r}",
+                    f"Krea2 的 timestep_type 推荐 linear，实际 {ttype!r}（能跑，口径偏了）",
                 )
             )
 
@@ -552,9 +667,13 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
         if not isinstance(ds, dict):
             problems.append(_problem("datasets.item", f"datasets[{i}] 必须是 dict"))
             continue
-        if not ds.get("folder_path"):
+        # [review #10] config_modules.py:935 定义 dataset_path，:1127 两个键都会被拆分。
+        if not (ds.get("folder_path") or ds.get("dataset_path")):
             problems.append(
-                _problem("datasets.folder-path", f"datasets[{i}].folder_path 为空")
+                _problem(
+                    "datasets.folder-path",
+                    f"datasets[{i}].folder_path（或 dataset_path）为空",
+                )
             )
         dropout = ds.get("caption_dropout_rate")
         if (
@@ -569,23 +688,31 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
                     f"（官方示例 0.05，超过 {_CAPTION_DROPOUT_MAX} 会明显削弱文本对齐）",
                 )
             )
+        # [review #9] config_modules.py:959 默认就是 int，单个 int 合法；:1122-1152 只在
+        # list 时复制数据集。
         res = ds.get("resolution")
-        if not isinstance(res, (list, tuple)) or not res:
+        if isinstance(res, int) and not isinstance(res, bool):
+            res_values: list[Any] = [res]
+        elif isinstance(res, (list, tuple)) and res:
+            res_values = list(res)
+        else:
             problems.append(
-                _problem("datasets.resolution", f"datasets[{i}].resolution 必须是非空列表")
+                _problem(
+                    "datasets.resolution",
+                    f"datasets[{i}].resolution 必须是正整数或非空列表，实际 {res!r}",
+                )
             )
             continue
-        if len(res) > 1:
+        if len(res_values) > 1:
             problems.append(
                 _problem(
                     "datasets.resolution-parallel",
-                    f"datasets[{i}].resolution 给了 {len(res)} 档 = 数据集复制成 "
-                    f"{len(res)} 份（config_modules.py:1116-1152），"
-                    f"steps ≈ 张数 × num_repeats × {len(res)}；只覆盖更多尺寸，"
-                    f"不会让训练更快，训练量与耗时同倍增加",
+                    f"datasets[{i}].resolution 给了 {len(res_values)} 档 = 数据集复制成 "
+                    f"{len(res_values)} 份（config_modules.py:1116-1152）：同样步数下每张图"
+                    f"被看到的次数变少；要等价效果需把 steps ×{len(res_values)}",
                 )
             )
-        for value in res:
+        for value in res_values:
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 problems.append(
                     _problem(
@@ -607,7 +734,10 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
     if not isinstance(sample, dict):
         problems.append(_problem("sample.missing", "缺少 sample 段"))
         return problems
-    if sample.get("sampler") != noise:
+    # [review #13] krea2/moss 的 generate_single_image 不读 sample.sampler
+    # （krea2.py:411-467、moss_image.py:371-411），且 train.noise_scheduler 必为 flowmatch
+    # → 每条 flow 系配置都恒响一次，属噪音。SDXL 的 sample.sampler 会真的影响出图口径。
+    if t is TargetModel.SDXL and sample.get("sampler") != noise:
         problems.append(
             _problem(
                 "sample.sampler-mismatch",
@@ -617,19 +747,31 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
         )
     if not sample.get("prompts"):
         problems.append(_problem("sample.prompts", "sample.prompts 为空，训练期不会有采样图"))
+    # [review #8] SampleConfig 的 width/height 默认 512、sample_steps 默认 20
+    # （config_modules.py:82-125），省略合法；只在键存在时校验。
     for key in ("width", "height", "sample_steps"):
+        if key not in sample:
+            continue
         value = sample.get(key)
         if not _positive(value):
             problems.append(
                 _problem("sample.size", f"sample.{key} 必须为正数，实际 {value!r}")
             )
+    # [review #19] flow 系按 bucket 整除量 16 判（krea2.py:204-206、moss_image.py:207-208），
+    # SDXL 保持 8。
+    size_multiple = _FLOW_SIZE_MULTIPLE if t in (TargetModel.KREA2, TargetModel.MOSS) else _SIZE_MULTIPLE
     for key in ("width", "height"):
         value = sample.get(key)
-        if isinstance(value, int) and not isinstance(value, bool) and value % _SIZE_MULTIPLE != 0:
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value % size_multiple != 0
+        ):
             problems.append(
                 _problem(
                     "sample.size-alignment",
-                    f"sample.{key}={value} 需要能被 {_SIZE_MULTIPLE} 整除",
+                    f"sample.{key}={value} 需要能被 {size_multiple} 整除"
+                    + ("（flow 系的 bucket 整除量）" if size_multiple != _SIZE_MULTIPLE else ""),
                 )
             )
 

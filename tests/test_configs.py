@@ -176,24 +176,32 @@ def test_validate_rejects_missing_job_and_process(cfgs: dict[TargetModel, dict])
     assert "process" in text
 
 
-def test_validate_rejects_model_path_mismatch(cfgs: dict[TargetModel, dict]) -> None:
+def test_model_path_mismatch_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #11] 家族判定靠 name_or_path 子串，会误杀本地权重名，只提示不拦。"""
     target = TargetModel.KREA2
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["model"]["name_or_path"] = "black-forest-labs/FLUX.1-dev"
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("不匹配" in p for p in problems)
+    detailed = validate_config_detailed(cfg, target)
+    hits = [p for p in detailed if p.code == "model.family-mismatch"]
+    assert hits
+    assert hits[0].severity == "warn"
+    assert "不匹配" in hits[0].message
+    assert validate_config(cfg, target) == []
 
 
-def test_validate_rejects_krea2_sigmoid(cfgs: dict[TargetModel, dict]) -> None:
+def test_krea2_sigmoid_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #3] sigmoid 只是 timestep 分布不同，kohya 也说仍能训。"""
     target = TargetModel.KREA2
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["train"]["timestep_type"] = "sigmoid"
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("sigmoid" in p for p in problems)
+    detailed = validate_config_detailed(cfg, target)
+    hits = [p for p in detailed if p.code == "train.timestep-type-sigmoid"]
+    assert hits
+    assert hits[0].severity == "warn"
+    assert "sigmoid" in hits[0].message
+    assert validate_config(cfg, target) == []
 
 
 def test_validate_rejects_sdxl_flowmatch(cfgs: dict[TargetModel, dict]) -> None:
@@ -209,52 +217,84 @@ def test_validate_rejects_sdxl_flowmatch(cfgs: dict[TargetModel, dict]) -> None:
 def test_moss_uncond_skip_layers_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
     """docs/models/moss_image.md:195：uncond_skip_layers 是推理侧 SLG 口径。
 
-    训练侧源码没读它，缺了只是出图对照组不齐，不该拦导出。
+    训练侧源码没读它，缺了只是出图对照组不齐，不该拦导出；[review #16] 只在键
+    存在且不含 22 时提示，完全省略不算错。
     """
     target = TargetModel.MOSS
     cfg = copy.deepcopy(cfgs[target])
-    _proc(cfg)["model"]["model_kwargs"].pop("uncond_skip_layers")
+    _proc(cfg)["model"]["model_kwargs"]["uncond_skip_layers"] = [20]
 
     detailed = validate_config_detailed(cfg, target)
     hits = [p for p in detailed if p.code == "model.moss-uncond-skip-layers"]
     assert hits, [p.code for p in detailed]
     assert hits[0].severity == "warn"
     assert "uncond_skip_layers" in hits[0].message
-    # 主管要求：说清楚它只影响出图预览，不影响训练
     assert "不影响训练" in hits[0].message
     assert validate_config(cfg, target) == []
 
+    # 键整个省略时不该响（缺省本来就不是 [22]）
+    omitted = copy.deepcopy(cfgs[target])
+    _proc(omitted)["model"]["model_kwargs"].pop("uncond_skip_layers")
+    assert "model.moss-uncond-skip-layers" not in _codes(validate_config_detailed(omitted, target))
 
-def test_validate_rejects_moss_arch_suffix(cfgs: dict[TargetModel, dict]) -> None:
+
+def test_moss_arch_suffix_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #12] 冒号后被截断是全 target 通用问题，丢 tag 不改变训练路径。"""
     target = TargetModel.MOSS
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["model"]["arch"] = "moss_image:base"
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("moss_image" in p for p in problems)
+    detailed = validate_config_detailed(cfg, target)
+    hits = [p for p in detailed if p.code == "model.arch-suffix"]
+    assert hits
+    assert hits[0].severity == "warn"
+    assert "moss_image" in hits[0].message
+    assert validate_config(cfg, target) == []
+
+    # krea2:raw 同样会被截断，不该只查 moss
+    kcfg = copy.deepcopy(cfgs[TargetModel.KREA2])
+    _proc(kcfg)["model"]["arch"] = "krea2:raw"
+    assert "model.arch-suffix" in _codes(validate_config_detailed(kcfg, TargetModel.KREA2))
 
 
-def test_validate_rejects_rank_alpha_mismatch(cfgs: dict[TargetModel, dict]) -> None:
+def test_rank_alpha_ratio_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #1] alpha/rank 只影响有效学习率 = lr × alpha/rank；默认值 4/1.0 是 0.25。"""
     target = TargetModel.SDXL
     cfg = copy.deepcopy(cfgs[target])
     proc = _proc(cfg)
     proc["network"]["linear"] = 8
-    proc["network"]["linear_alpha"] = 64
+    proc["network"]["linear_alpha"] = 64  # ratio 8.0，明显偏大
 
-    problems = validate_config(cfg, target)
-    assert problems
-    assert any("alpha" in p for p in problems)
+    detailed = validate_config_detailed(cfg, target)
+    hits = [p for p in detailed if p.code == "network.rank-alpha-ratio"]
+    assert hits
+    assert hits[0].severity == "warn"
+    assert "alpha" in hits[0].message
+    assert validate_config(cfg, target) == []
+
+    # ai-toolkit 自己的默认值 4 / 1.0 = 0.25 不许被判成问题
+    default_cfg = copy.deepcopy(cfgs[target])
+    default_cfg["config"]["process"][0]["network"].update(linear=4, linear_alpha=1.0)
+    assert "network.rank-alpha-ratio" not in _codes(
+        validate_config_detailed(default_cfg, target)
+    )
 
 
-def test_sampler_mismatch_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
-    """出图口径不一致只是看到的东西不对，训练本身照跑。"""
-    target = TargetModel.KREA2
+def test_sampler_mismatch_is_only_a_warning_for_sdxl(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #13] flow 系不读 sample.sampler，恒响是噪音；只在 SDXL 提示。"""
+    target = TargetModel.SDXL
     cfg = copy.deepcopy(cfgs[target])
-    _proc(cfg)["sample"]["sampler"] = "ddpm"
+    _proc(cfg)["sample"]["sampler"] = "euler"
 
     assert "sample.sampler-mismatch" in _warn_codes(cfg, target)
     assert validate_config(cfg, target) == []
+
+    for flow_target in (TargetModel.KREA2, TargetModel.MOSS):
+        flow_cfg = copy.deepcopy(cfgs[flow_target])
+        _proc(flow_cfg)["sample"]["sampler"] = "ddpm"
+        assert "sample.sampler-mismatch" not in _codes(
+            validate_config_detailed(flow_cfg, flow_target)
+        )
 
 
 def test_resolution_not_aligned_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
@@ -277,8 +317,10 @@ def test_resolution_parallel_explains_the_multiplier(cfgs: dict[TargetModel, dic
     assert len(hits) == 1
     message = hits[0].message
     assert "×" in message or "份" in message
-    assert "num_repeats" in message
+    # [review #15] 文案改成「曝光次数 / steps ×N」，不再说「耗时同倍增加」
+    assert "步数" in message
     assert "2" in message  # 把 N 这个实际档位数写进去
+    assert "耗时" not in message
     # 默认三档也要报，不许只在 >2 档时才报
     default_hits = [
         p
@@ -312,23 +354,28 @@ def test_validate_reports_at_least_five_distinct_errors(cfgs: dict[TargetModel, 
     """任务要求：至少能抓 5 种不同的错误配置。"""
     cases = [
         # (target, 变异函数, 期望关键词)
-        (TargetModel.KREA2, lambda c: _proc(c)["train"].update(timestep_type="sigmoid"), "sigmoid"),
-        (TargetModel.SDXL, lambda c: _proc(c)["train"].update(noise_scheduler="flowmatch"), "flowmatch"),
         (
-            TargetModel.MOSS,
-            lambda c: _proc(c)["train"].update(train_text_encoder=True),
-            "text_encoder",
+            TargetModel.KREA2,
+            lambda c: _proc(c)["train"].update(timestep_type="bogus"),
+            "bogus",
         ),
         (
+            TargetModel.MOSS,
+            lambda c: _proc(c)["train"].update(timestep_type="bogus"),
+            "bogus",
+        ),
+        (TargetModel.SDXL, lambda c: _proc(c)["train"].update(noise_scheduler="flowmatch"), "flowmatch"),
+        (
             TargetModel.SDXL,
-            lambda c: _proc(c)["network"].update(linear=8, linear_alpha=64),
-            "alpha",
+            lambda c: _proc(c)["network"].update(linear=None),
+            "rank",
         ),
         (
             TargetModel.KREA2,
-            lambda c: _proc(c)["model"].update(name_or_path="stabilityai/stable-diffusion-xl-base-1.0"),
-            "不匹配",
+            lambda c: _proc(c)["model"].update(name_or_path=""),
+            "name_or_path",
         ),
+        (TargetModel.MOSS, lambda c: _proc(c)["sample"].update(width=-64), "width"),
     ]
     caught = 0
     for target, mutate, keyword in cases:
@@ -338,6 +385,125 @@ def test_validate_reports_at_least_five_distinct_errors(cfgs: dict[TargetModel, 
         assert any(keyword in p for p in problems), (target, problems)
         caught += 1
     assert caught >= 5
+
+
+def test_moss_timestep_type_is_validated(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #14] 原实现只查 KREA2，MOSS 的 timestep_type 完全没校验。"""
+    target = TargetModel.MOSS
+    assert _proc(cfgs[target])["train"]["timestep_type"] == "shift"
+
+    cfg = copy.deepcopy(cfgs[target])
+    _proc(cfg)["train"]["timestep_type"] = "nonsense"
+    hits = [p for p in validate_config_detailed(cfg, target) if p.code == "train.timestep-type-unknown"]
+    assert hits
+    assert hits[0].severity == "error"
+    assert "nonsense" in hits[0].message
+
+
+def test_timestep_whitelist_accepts_shift_family(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #2] shift / flux_shift / lumina2_shift 是源码明确处理的合法分支。"""
+    for value in ("shift", "flux_shift", "lumina2_shift"):
+        cfg = copy.deepcopy(cfgs[TargetModel.KREA2])
+        _proc(cfg)["train"]["timestep_type"] = value
+        codes = _codes(validate_config_detailed(cfg, TargetModel.KREA2))
+        assert "train.timestep-type-unknown" not in codes, value
+
+
+def test_sdxl_arch_may_be_implied_by_is_xl(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #6] config_modules.py:809-831 允许由 is_xl 推出 sdxl。"""
+    target = TargetModel.SDXL
+    cfg = copy.deepcopy(cfgs[target])
+    proc = _proc(cfg)
+    proc["model"].pop("arch")
+    assert "model.arch" in _codes(validate_config_detailed(cfg, target))
+
+    proc["model"]["is_xl"] = True
+    assert "model.arch" not in _codes(validate_config_detailed(cfg, target))
+
+
+def test_datasets_accept_scalar_resolution_and_dataset_path_alias(
+    cfgs: dict[TargetModel, dict],
+) -> None:
+    """[review #9/#10] resolution 允许单个 int；folder_path 允许 dataset_path 别名。"""
+    target = TargetModel.SDXL
+    cfg = copy.deepcopy(cfgs[target])
+    ds = _proc(cfg)["datasets"][0]
+    ds["resolution"] = 1024
+    ds.pop("folder_path")
+    ds["dataset_path"] = "./datasets/my_character"
+
+    codes = _codes(validate_config_detailed(cfg, target))
+    assert "datasets.resolution" not in codes
+    assert "datasets.folder-path" not in codes
+    assert "datasets.resolution-parallel" not in codes
+
+
+def test_sample_size_keys_may_be_omitted(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #8] width/height/sample_steps 都有默认值，省略不该报错。"""
+    target = TargetModel.SDXL
+    cfg = copy.deepcopy(cfgs[target])
+    sample = _proc(cfg)["sample"]
+    for key in ("width", "height", "sample_steps"):
+        sample.pop(key)
+
+    codes = _codes(validate_config_detailed(cfg, target))
+    assert "sample.size" not in codes
+    assert "sample.size-alignment" not in codes
+
+
+def test_flow_sample_size_must_be_divisible_by_16(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #19] krea2/moss 的 bucket 整除量是 16，不是 8。"""
+    for target in (TargetModel.KREA2, TargetModel.MOSS):
+        cfg = copy.deepcopy(cfgs[target])
+        _proc(cfg)["sample"]["width"] = 1032  # 8 的倍数、不是 16 的倍数
+        hits = [
+            p
+            for p in validate_config_detailed(cfg, target)
+            if p.code == "sample.size-alignment"
+        ]
+        assert hits, target
+        assert "16" in hits[0].message
+
+    sdxl_cfg = copy.deepcopy(cfgs[TargetModel.SDXL])
+    _proc(sdxl_cfg)["sample"]["width"] = 1032
+    assert "sample.size-alignment" not in _codes(
+        validate_config_detailed(sdxl_cfg, TargetModel.SDXL)
+    )
+
+
+def test_qtype_is_only_checked_when_quantization_is_on(
+    cfgs: dict[TargetModel, dict],
+) -> None:
+    """[review #17] quantize 关着的时候查 qtype 家族是噪音。"""
+    target = TargetModel.SDXL  # SDXL 默认不开量化
+    cfg = copy.deepcopy(cfgs[target])
+    _proc(cfg)["model"]["qtype"] = "w8a8-unknown"
+    assert "model.qtype-unknown" not in _codes(validate_config_detailed(cfg, target))
+
+    _proc(cfg)["model"]["quantize"] = True
+    assert "model.qtype-unknown" in _codes(validate_config_detailed(cfg, target))
+
+
+def test_lr_boundary_and_required_empty_semantics(cfgs: dict[TargetModel, dict]) -> None:
+    """[review #7/#18] 空值只拦显式写法；lr 阈值是 5e-3。"""
+    target = TargetModel.SDXL
+    omitted = copy.deepcopy(cfgs[target])
+    _proc(omitted)["train"].pop("batch_size")
+    assert "train.required-empty" not in _codes(validate_config_detailed(omitted, target))
+
+    explicit = copy.deepcopy(cfgs[target])
+    _proc(explicit)["train"]["batch_size"] = None
+    hits = [
+        p
+        for p in validate_config_detailed(explicit, target)
+        if p.code == "train.required-empty"
+    ]
+    assert hits
+    assert hits[0].severity == "warn"
+
+    high = copy.deepcopy(cfgs[target])
+    _proc(high)["train"]["lr"] = 8e-3
+    assert "train.lr-too-large" in _error_codes(high, target)
 
 
 def test_validate_accepts_raw_dict_with_missing_sections() -> None:
@@ -387,7 +553,7 @@ def test_known_codes_covers_every_emitted_code(cfgs: dict[TargetModel, dict]) ->
         (TargetModel.SDXL, lambda c: _proc(c)["model"].update(quantize=True)),
         (TargetModel.KREA2, lambda c: _proc(c)["train"].update(timestep_type="sigmoid")),
         (TargetModel.KREA2, lambda c: _proc(c)["sample"].update(sampler="ddpm")),
-        (TargetModel.MOSS, lambda c: _proc(c)["model"]["model_kwargs"].pop("uncond_skip_layers")),
+        (TargetModel.MOSS, lambda c: _proc(c)["model"]["model_kwargs"].update(uncond_skip_layers=[20])),
         (TargetModel.MOSS, lambda c: _proc(c)["train"].update(train_text_encoder=True)),
         (TargetModel.SDXL, lambda c: _proc(c)["datasets"][0].update(caption_dropout_rate=0.5)),
         (TargetModel.MOSS, lambda c: _proc(c)["model"].update(qtype="w8a8-unknown")),
