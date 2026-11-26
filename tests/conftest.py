@@ -9,20 +9,28 @@
 
 from __future__ import annotations
 
+import itertools
+import os
 import shutil
-import tempfile
 from pathlib import Path
 
 import pytest
 
 SCRATCH_ROOT = Path(__file__).resolve().parent.parent / ".scratch"
+_COUNTER = itertools.count(1)
 
 
 @pytest.fixture
 def scratch() -> Path:
-    """一个空目录，用完删除。替代 tmp_path。"""
+    """一个空目录，用完删除。替代 tmp_path。
+
+    注意不能用 `tempfile.mkdtemp`：它以 0700 建目录，只给 owner 的 ACL，
+    本机连 chmod 都被拒，于是写不进去、事后也删不掉（曾留下两个删不掉的空目录）。
+    这里用 `Path.mkdir()` 的默认权限。
+    """
     SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
-    d = Path(tempfile.mkdtemp(prefix="t-", dir=SCRATCH_ROOT))
+    d = SCRATCH_ROOT / f"t-{os.getpid()}-{next(_COUNTER)}"
+    d.mkdir()
     try:
         yield d
     finally:
