@@ -69,11 +69,11 @@
 
 | 来源 | 类型 | 可信度 | 本轮处理 |
 |---|---|---|---|
-| `docs/models/_seed-from-lead.md`（主管手写，60 行） | 内部种子 | **二手转述**，未核实 | 已逐条对照源码/官方文档；核对结果见三份模型文档「未查实」表。该文件不是交付文档，需移出 `docs/models/` |
-| `chengyansen-ai/krea2-lora-training`（MIT，约 6★） | 第三方训练仓库 | **二手转述**（种子转述，未直接访问） | 其 Krea2 参数（32/32、1e-4、2500 步、flowmatch、linear、桶 512/768/1024、caption_dropout 0.05、DOP）与源码机制不冲突，但**没有一条是它自己验证过的换算**；只作起点参考 |
-| `EnragedAntelope/dataset-deviser` | 竞品仓库 | 未访问（仅种子提及） | 两条复盘（同一套衣服每张都出现→服装被学成角色；参考图道具被复制→道具被学成角色）记为**二手实战教训**，未在本仓库验证 |
-| `jhc13/taggui`、`fpgaminer/joycaption` | 竞品仓库 | 未访问 | 竞品分析留待后续轮次 |
-| Reddit / Civitai / Discord 社区经验 | 社区 | 传闻 | 本轮尝试抓取，**Reddit 全线不可达**（JSON 接口、old 站、firecrawl 三条路都失败，见 §4）；改用官方博客与框架文档里的作者实测，论坛口径仍缺 |
+| 主管种子笔记（原 `docs/models/_seed-from-lead.md`；main 上已移至 `docs/research/lead-seed-notes.md`） | 内部二手线索 | **二手转述**，未核实 | 2026-11-27 已逐条对照源码/官方文档；本仓库里的旧副本已删除。核对结果见三份模型文档「未查实」表；本文件不再把它当引用来源 |
+| `chengyansen-ai/krea2-lora-training`（MIT，约 6★） | 第三方训练仓库 | **二手汇编**（2026-11-27 已直接读取 README 与 `references/`，见 §9.1） | 其 Krea2 参数（32/32、1e-4、2500 步、flowmatch、linear、桶 512/768/1024、caption_dropout 0.05、DOP）与源码机制不冲突，但作者未公开日志，**没有一条经我们复现**；只作起点参考与踩坑索引 |
+| `EnragedAntelope/dataset-deviser` | 竞品仓库 | 已直接读取 README（2026-11-27，见 §9.3） | README 里可直接读到的规则（trigger 学身份 / caption 写变化 / 道具先命名）作为**竞品规则**引用；「同一套衣服每张都出现→服装被学成角色」这类观感仍属二手转述，见 `_competitor-gaps.md` §5 |
+| `jhc13/taggui`、`fpgaminer/joycaption` | 竞品仓库 | 已直接读取 README（2026-11-27，见 §9.3） | 结论只记「我们缺什么」，见 `_competitor-gaps.md` |
+| Reddit / Civitai / Discord 社区经验 | 社区 | 传闻 | Reddit 全线不可达（JSON 接口、old 站、firecrawl 三条路都失败，见 §4）；本轮改用 HF discussions、GitHub issue 与官方文档里的作者实测（§9），论坛口径仍缺 |
 
 ---
 
@@ -136,6 +136,50 @@
 
 ---
 
+## 9. 社区实战与竞品（2026-11-27 一手抓取）
+
+> 抓取方式：GitHub raw / GitHub API 均可用；HF 社区讨论用 `https://huggingface.co/api/models/<repo>/discussions` 与 `/discussions/<n>`（`urllib` + User-Agent）。本地副本在 `_src/`，指纹为本机 `sha256` 前 16 位。
+> 可信度四档沿用本文件开头：**一手实测**（作者跑过并给数字/日志）/ **官方文档** / **第三方官方** / **二手汇编或用户帖**（未复现、单帖、无方法学）。
+
+### 9.1 Krea 2 社区证据
+
+| 来源 | 内容 | 可信度 | 本地副本与指纹 |
+|---|---|---|---|
+| `https://github.com/chengyansen-ai/krea2-lora-training`（MIT，README 与 `references/`）— 访问 2026-11-27 | 社区校准参数（`linear`+`flowmatch`、32/32、1e-4、2500 步、qfloat8、DOP、桶 512/768/1024）；步数实测区间；踩坑全集（头大身小、采样器漂脸、霓虹染发、概念泄漏、DOP 双加载、32767 环境变量） | **二手汇编**（作者称做过多轮 cysgirl 实跑，未公开日志；引用的 r/StableDiffusion 帖本机不可达） | `_src/krea2-lora-training-README.md` 11,495 B/198 行/`b2df8c87cf82363f…`；`_src/krea2skill-references-krea2-community-best-practices.md` 10,899 B/202 行/`0a0fb8887bb72afc…`；`_src/krea2skill-references-踩坑全集.md` 8,767 B/170 行/`7f14a469ff0a8fe6…` |
+| `https://github.com/ostris/ai-toolkit/issues/1057`（2026-09-21 开） | 「Krea 2 LoRA + layer offloading = LoRA 无效果」，INT8、100% offloading，作者称可复现 | **用户帖**（单用户，未复现） | 通过 GitHub API 读取 |
+| `https://github.com/ostris/ai-toolkit/issues/1070`（2026-10-01 开） | feature request：训练用 Raw、采样用 Turbo | **用户帖**（说明该需求真实存在且未实现） | 同上 |
+| `https://github.com/ostris/ai-toolkit/issues/968`（2026-07-21） | 启动报 `No module named 'dotenv'` 的环境问题 | 用户帖（与训练无关） | 同上 |
+| `https://huggingface.co/api/models/krea/Krea-2-Raw/discussions` 及 `/10` `/1` — 访问 2026-11-27 | 6 条讨论：<4GB 显存跑（第三方 WeeLLM）、ComfyUI 工作流、bbox 控制询问、1-click 安装 | 用户帖；无训练参数信息 | `_src/hf-krea2-discussions.json` 3,783 B/`921696f747899719…` |
+| kohya `README.md`（2026-11-27 抓取） | 全文 **0 处** 提及 Krea → kohya 不支持 Krea2 | 一手官方文档（缺席本身是证据） | `_src/kohya-README.md` 33,691 B |
+
+### 9.2 MOSS-Image 社区证据
+
+| 来源 | 内容 | 可信度 | 本地副本与指纹 |
+|---|---|---|---|
+| `https://github.com/sorryhyun/anima_lora`（commit `780028ac994467aef1ecb94bffc6c8760da5bd0a`，2026-10-18）`project/moss_lora/plan.md`、`docs/moss-findings/*` | 16GB 卡 LoRA 方案（6 线性层×42、fp32 master+bf16、缓存 TE/latent、DiT 常驻 9.7 GiB、目标 <1h/<15GiB）；caption 长度步时代价（+24% linear / +53% attention）；chat template 即 attention sink（0.24–0.34 图像 query 质量）；Base vs SFT 观感；2MP fp32 VAE 解码需先卸 DiT | **一手实测**（作者给了探针、数字、环境；非官方、单作者） | `_src/anima-project-moss_lora-plan.md` 10,412 B/169 行/`67923657edffba7f…`；`_src/anima-docs-moss-findings-attention_sink_chat_template.md` 7,594 B/130 行/`59f2afc0b9590f55…` |
+| `https://huggingface.co/OpenMOSS-Team/MOSS-Image-Base/discussions/6` | i2i 上色 LoRA：`qwen(image, caption)` + `vae(downscale 2)`，5070 Ti 约 1 小时 | 用户帖（附权重/工作流/训练代码链接） | `_src/moss-6.json` 4,955 B/`07e023560d8df72f…` |
+| `…/discussions/9` | 「BLUR everywhere」：背景糊、主体身体也糊；同 prompt 在 Krea2/Z-Image/Chroma/Flux 正常 | 用户帖（机制为发帖人猜测） | `_src/moss-9.json` 3,036 B/`133ebf3fc5bdada3…` |
+| `…/discussions/12` | 「All the problems」：背景糊 + 风格 LoRA 不像 + 形体崩 | 用户帖（无配置） | `_src/moss-12.json` 3,388 B/`249a1c020f53a2e1…` |
+| `…/discussions/14` | 1024² 无布局框，footer 小字网格逐条引号写出，**全部拼对**、栅格对齐 | 用户帖（带图与 recipe） | `_src/moss-14.json` 3,897 B/`7fc9ffa71dfdc1ff…` |
+| `https://huggingface.co/api/models/OpenMOSS-Team/MOSS-Image-Base/discussions` — 访问 2026-11-27 | 共 16 条讨论（含 2 条 PR），其余为安装/Colab/口味类 | 用户帖 | `_src/hf-moss-discussions.json` 10,452 B/`bc3e1b122950e184…` |
+
+### 9.3 竞品（README 一手，2026-11-27）
+
+| 来源 | 内容 | 可信度 | 本地副本与指纹 |
+|---|---|---|---|
+| `https://github.com/EnragedAntelope/dataset-deviser`（MIT，9★） | 三种数据集类型的 caption 语义；Prose/Danbooru/e621 三种 caption 风格按目标模型切；规范标签走 WD/Z3D tagger 而非 VLM；tag options（前后缀/丢弃/rating/下划线/阈值/跳过已打标）；health check 含「几乎每张都出现的标签」→ 丢弃列表；失败可断点续跑 | **官方 README**（作者自述，未复现其流程） | `_src/deviser-README.md` 20,709 B/325 行/`b319ea577705875a…` |
+| `https://github.com/jhc13/taggui`（1368★） | 键盘优先逐图打标、N/M 进度、用户词表自动补全、SD token 计数、批量标签操作、列表过滤、内置多 VLM 打标 | **官方 README** | `_src/taggui-README.md` 10,792 B/251 行/`8b2555e4f8644d95…` |
+| `https://github.com/fpgaminer/joycaption`（1305★） | 每种打标模式的固定 prompt 原文与稳定性说明；`Straightforward` 模板的硬约束（不写画面没有的/不写分辨率/文字原样引号/提水印）；界面回显所用 prompt；bf16 约 17GB | **官方 README** | `_src/joycaption-README.md` 20,508 B/278 行/`87fc98909da0a1b8…` |
+| dataset-deviser issue 区 | 0 个 open issue（2026-11-27 GitHub API 查） | 事实（无可读的用户反馈） | — |
+
+### 9.4 结论边界
+
+- 上述社区证据**没有一条**是「带完整配置 + 对照样图」的一手复现，除 `anima_lora` 的显存/成本测量外，其余只用于决定「先测什么、先怀疑什么」。
+- 竞品结论只取 README 原文；`dataset-deviser` 的观感类说法（如「同一套衣服每张都出现→服装被学成角色」）在本仓库链条中仍是二手转述，见 `_competitor-gaps.md` §5。
+- Reddit 与 Krea 官方 model card 的缺口见 §4、§8.2。
+
+---
+
 ## 关键论断 → 来源索引
 
 | 论断 | 来源 |
@@ -160,3 +204,11 @@
 | MOSS 预训练 timestep 是 logit-normal、shift 5.0 仅推理 | kohya `docs/moss_image_train_network.md` |
 | MOSS 显存与 ConvRot INT8 训练可用性 | kohya README + `docs/moss_image_train_network.md` |
 | Reddit 社区口径缺失 | 本文件 §4（三条路径均访问失败） |
+| Krea2 训练用 Raw、采样器/头身比/霓虹染发/概念泄漏等失败模式 | 本文件 §9.1（二手汇编 + 单条用户帖；非一手复现） |
+| Krea2「INT8 + layer offloading 同时开 → LoRA 无效」 | ai-toolkit issue #1057（§9.1，用户帖） |
+| MOSS 16GB LoRA 方案与 caption 长度步时代价 | `anima_lora` `project/moss_lora/plan.md`（§9.2，一手实测） |
+| MOSS 背景/主体发糊、文字渲染准确 | HF discussions #9/#12/#14（§9.2，用户帖） |
+| MOSS chat template 是 attention sink | `anima_lora` `docs/moss-findings/attention_sink_chat_template.md`（§9.2，一手实测） |
+| 竞品 caption 风格矩阵、规范标签靠 tagger、健康检查接丢弃列表 | dataset-deviser README（§9.3）+ `_competitor-gaps.md` |
+| SD token 计数、用户词表补全 | taggui README（§9.3）+ `_competitor-gaps.md` G5 |
+| 打标模式的固定 prompt 与 Straightforward 硬约束 | joycaption README（§9.3）+ `_competitor-gaps.md` G6/G7 |
