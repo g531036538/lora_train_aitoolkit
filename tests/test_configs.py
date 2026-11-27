@@ -190,7 +190,94 @@ def test_model_path_mismatch_is_only_a_warning(cfgs: dict[TargetModel, dict]) ->
     assert validate_config(cfg, target) == []
 
 
-def test_krea2_sigmoid_is_only_a_warning(cfgs: dict[TargetModel, dict]) -> None:
+def test_local_weight_filenames_are_not_family_mismatches(
+    cfgs: dict[TargetModel, dict],
+) -> None:
+    """§六：下划线/点分隔的本地权重名归一后匹配，不再误杀。"""
+    cases = {
+        TargetModel.MOSS: "./weights/moss_image_base.safetensors",
+        TargetModel.SDXL: "./weights/sd_xl_base_1.0.safetensors",
+    }
+    for target, name in cases.items():
+        cfg = copy.deepcopy(cfgs[target])
+        _proc(cfg)["model"]["name_or_path"] = name
+        codes = _codes(validate_config_detailed(cfg, target))
+        assert "model.family-mismatch" not in codes, (target, name)
+
+    # 真拿错底座的仍然提示
+    cfg = copy.deepcopy(cfgs[TargetModel.MOSS])
+    _proc(cfg)["model"]["name_or_path"] = "black-forest-labs/FLUX.1-dev"
+    assert "model.family-mismatch" in _codes(
+        validate_config_detailed(cfg, TargetModel.MOSS)
+    )
+
+
+def test_train_variant_warns_for_sft_or_turbo(cfgs: dict[TargetModel, dict]) -> None:
+    """§六：训练底座落在出图侧变体上，只提示（kohya 对两者都支持 LoRA）。"""
+    cases = [
+        (TargetModel.MOSS, "OpenMOSS-Team/MOSS-Image-SFT", "MOSS-Image-Base"),
+        (TargetModel.KREA2, "krea/Krea-2-Turbo", "TRAIN on Raw"),
+    ]
+    for target, name, keyword in cases:
+        cfg = copy.deepcopy(cfgs[target])
+        _proc(cfg)["model"]["name_or_path"] = name
+        hits = [
+            p
+            for p in validate_config_detailed(cfg, target)
+            if p.code == "model.train-variant"
+        ]
+        assert hits, target
+        assert hits[0].severity == "warn"
+        assert keyword in hits[0].message
+        assert validate_config(cfg, target) == []
+
+
+def test_train_variant_ignores_training_side_variants(
+    cfgs: dict[TargetModel, dict],
+) -> None:
+    cases = [
+        (TargetModel.MOSS, "OpenMOSS-Team/MOSS-Image-Base"),
+        (TargetModel.KREA2, "krea/Krea-2-Raw"),
+    ]
+    for target, name in cases:
+        cfg = copy.deepcopy(cfgs[target])
+        _proc(cfg)["model"]["name_or_path"] = name
+        codes = _codes(validate_config_detailed(cfg, target))
+        assert "model.train-variant" not in codes, (target, name)
+
+
+def test_quantize_with_offloading_is_only_a_warning(
+    cfgs: dict[TargetModel, dict],
+) -> None:
+    """量化 + layer offloading 同开：issue #1057 的单用户报告，只提示不拦。"""
+    target = TargetModel.KREA2
+    cfg = copy.deepcopy(cfgs[target])
+    _proc(cfg)["model"]["layer_offloading"] = True
+    hits = [
+        p
+        for p in validate_config_detailed(cfg, target)
+        if p.code == "model.quantize-with-offloading"
+    ]
+    assert hits
+    assert hits[0].severity == "warn"
+    assert "issue #1057" in hits[0].message
+    assert validate_config(cfg, target) == []
+
+    # 旧键名 auto_memory 同样算 offloading（config_modules.py:721-723）
+    legacy = copy.deepcopy(cfgs[target])
+    _proc(legacy)["model"]["auto_memory"] = True
+    assert "model.quantize-with-offloading" in _codes(
+        validate_config_detailed(legacy, target)
+    )
+
+    # 只留一个开关就不该提示
+    single = copy.deepcopy(cfgs[target])
+    _proc(single)["model"].update(
+        quantize=False, quantize_te=False, layer_offloading=True
+    )
+    assert "model.quantize-with-offloading" not in _codes(
+        validate_config_detailed(single, target)
+    )
     """[review #3] sigmoid 只是 timestep 分布不同，kohya 也说仍能训。"""
     target = TargetModel.KREA2
     cfg = copy.deepcopy(cfgs[target])
