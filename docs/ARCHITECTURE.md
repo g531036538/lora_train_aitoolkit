@@ -155,18 +155,27 @@ def flatten_alpha(
 @dataclass
 class FlattenReport:
     items: list[tuple[Path, Path | None, str | None]]  # 源、产物、错误原因
-    written: int
-    failed: int
+    written: int                       # 真的写了
+    failed: int                        # 真失败：读不了 / 写不了 / 不是图片
+    skipped: int = 0                   # 目标已存在，跳过
+    exists: list[tuple[Path, str]]     # 跳过的逐图说明
+    errors: list[tuple[Path, str]]     # 真失败的逐图说明
+    # ok == (failed == 0)；跳过不影响 ok
 ```
 
 规则：
 
-1. 产物写进**新目录** `out_dir`，`out_dir` 已有同名文件就报错跳过，**绝不覆盖**原图。
+1. 产物写进**新目录** `out_dir`，`out_dir` 已有同名文件就**跳过**，**绝不覆盖**原图。
 2. 一律输出 RGB PNG（无 alpha）；`copy_sidecar=True` 时把同名 `.txt` 一并复制过去，
    内容逐字节不变——打标词与图必须继续配对。
 3. 单张失败不中断整批，记进 `items` 的第三个字段（中文原因）。
-4. 界面提供「合成到纯色底（生成新目录）」动作，纯色默认白，可选黑/灰，
-   显示 `written/failed`，并提示「原图没有改动」。
+4. **计数口径（硬性）**：`written + skipped + failed == len(images)`，一条不许漏。
+   `skipped` 是「目标已有同名文件，跳过」，**不是失败**，不进 `ok` 判定；
+   `failed` 才是读不了 / 写不了 / 不是图片。界面必须把两者分两栏显示，
+   跳过时给一句「原图没动、换新目录才会重新生成」，不许并进「失败」。
+5. 界面提供「合成到纯色底（生成新目录）」动作，纯色默认白，可选黑/灰，
+   显示 `written/skipped/failed`，并提示「原图没有改动」。
+6. `out_dir` 等于数据集目录时直接拒绝（400）——原图不许动是硬约束，不为「方便」开口子。
 
 ---
 
