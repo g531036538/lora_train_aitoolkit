@@ -32,7 +32,7 @@ class ExportReport:
     captions: int
     missing_caption: list[str]
     orphan_caption: list[str]
-    #: 同名冲突（``A.PNG`` 与 ``a.png`` 抢同一份 ``a.txt``）。契约外新增，带默认值。
+    #: 同名冲突（``a.png`` 与 ``a.jpg`` 抢同一份 ``a.txt``）。契约外新增，带默认值。
     ambiguous: list[str] = field(default_factory=list)
 
     @property
@@ -47,7 +47,8 @@ class DatasetScan:
 
     root: Path
     images: list[Path]
-    #: ``stem.lower() -> 打标文件``。同名冲突时取排序后的第一个，冲突另报。
+    #: ``stem.lower() -> 打标文件``。同一 stem 有多份 .txt 时取排序第一个（大小写敏感
+    #: 文件系统上才可能出现），图侧撞名由 ``ambiguous`` 报。
     captions: dict[str, Path]
 
     @property
