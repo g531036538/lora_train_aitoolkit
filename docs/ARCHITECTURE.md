@@ -200,6 +200,11 @@ def list_backends() -> list[BackendInfo]:
       requires_gpu / requires_network / requires_credentials / unsupported_target
     界面按前缀渲染图标与分组；前缀之后的文字随便写，给人看。
     新增前缀不算破坏契约，但必须同时更新本词表，否则界面只能按「未知」处理。
+
+    「测试用假后端」（key="fake"）默认不列：它是拿假标签冒充真结果的演示品，
+    出现在下拉框里会让用户以为打标成功。仅当环境变量 LORAFORGE_ENABLE_FAKE=1
+    时列出，此时它的 label 必须带「测试用，不读图」字样。
+    测试代码直接构造 FakeBackend()，不依赖 list_backends() 把它列出来。
     """
 
 def get_backend(key: str) -> CaptionBackend:
