@@ -12,10 +12,8 @@ from __future__ import annotations
 import pathlib
 from typing import Final
 
-import yaml
-
-from loraforge.configs.base import build_config
 from loraforge.configs.plans import plan_for_tier
+from loraforge.configs.render import render_train_config
 from loraforge.models import TargetModel
 
 #: 示例文件名（不带扩展名）。与 ``loraforge.models.TargetModel`` 的取值对应。
@@ -98,10 +96,9 @@ def render_example(target: TargetModel) -> str:
     与 :func:`write_examples` 写出的字节完全一致，测试靠它做漂移比对。
     """
     plan = plan_for_tier(target, "24", **EXAMPLE_PLAN)
-    body = yaml.safe_dump(
-        build_config(target, plan), sort_keys=False, allow_unicode=True
-    )
-    return HEADERS[target] + body
+    # 示例的头部是手写的长说明，所以拿不带默认头部的本体；渲染口径统一在
+    # render_train_config 里（纯 LF、\n 结尾、键序与 build_config 一致）。
+    return HEADERS[target] + render_train_config(target, plan, header=False).decode("utf-8")
 
 
 def write_examples(directory: str | pathlib.Path) -> list[pathlib.Path]:
