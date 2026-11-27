@@ -7,7 +7,7 @@
 - ``identity_removed`` Krea2 已从原文剥掉身份描述（标黄，提醒输入被改）
 - ``unquoted_text``   MOSS 图内文字没有加引号（标黄，格式提醒）
 - ``token_overflow``   SDXL 打标词超过近似上限（标黄，可能被 CLIP 静默截断）
-- ``duplicate``       多图完全一致，或某标签出现在 >80% 的图上（标黄，泄漏风险）
+- ``duplicate``       多图打标词一字不差（标黄，多半是后端复制输出）
 
 同一张图有多个问题时合并成一条 ``CheckResult``，message 里用中文分号分开；
 code 按 empty > missing_trigger > token_overflow > too_short >
@@ -44,19 +44,6 @@ Severity = Literal["info", "warn", "error"]
 
 SDXL_SOFT_TAG_LIMIT = 75
 SDXL_SOFT_WORD_LIMIT = 60
-
-_STRUCTURAL_TAGS = frozenset(
-    {
-        "1girl",
-        "1boy",
-        "1other",
-        "2girls",
-        "multiple girls",
-        "solo",
-        "solo focus",
-        "no humans",
-    }
-)
 
 _TAG_SPLIT_RE = re.compile(r"[,;\n]+")
 _WEIGHT_RE = re.compile(r"\(([^():]+):\s*[0-9.]+\)")
@@ -113,13 +100,11 @@ def _style_of(ctx: CaptionContext) -> str:
     return getattr(profile, "caption_style", "tags")
 
 
-def _duplicate_message(current: str, names: list[str]) -> str:
-    others = [name for name in names if name != current]
-    shown = "、".join(others[:3])
-    suffix = " 等" if len(others) > 3 else ""
+def _duplicate_message(position: int, other: int) -> str:
+    first, second = sorted((position, other))
     return (
-        f"与其他 {len(others)} 张图（{shown}{suffix}）打标完全一致；"
-        "检查后端是否复制，或这些图是否过于相似"
+        f"第 {first} 张与第 {second} 张打标词完全相同；"
+        "检查后端是否复制输出，或这些图是否过于相似"
     )
 
 
@@ -223,24 +208,11 @@ def check_captions(
 
     style = _style_of(ctx)
     trigger = ctx.trigger.strip()
-    trigger_tag = _normalize(trigger.replace("_", " ").lower())
     normalized = [_normalize(caption) for _, caption in entries]
 
-    tag_counts: Counter[str] = Counter()
-    per_image_tags: list[list[str]] = []
-    for _, caption in entries:
-        tags = _tags(caption) if style == "tags" else []
-        per_image_tags.append(tags)
-        tag_counts.update(set(tags))
-
-    high_freq: list[str] = []
-    if style == "tags" and total >= 3:
-        threshold = total * 0.8
-        high_freq = sorted(
-            tag
-            for tag, count in tag_counts.items()
-            if count > threshold and tag not in _STRUCTURAL_TAGS and tag != trigger_tag
-        )
+    per_image_tags: list[list[str]] = [
+        _tags(caption) if style == "tags" else [] for _, caption in entries
+    ]
 
     results: list[CheckResult] = []
     for position, (image, caption) in enumerate(entries, start=1):
@@ -297,24 +269,13 @@ def check_captions(
             problems.append(_unquoted_message(unquoted_lines))
 
         has_duplicate = False
-        same_names = [
-            entries[other][0].name
-            for other, other_text in enumerate(normalized)
-            if other_text and other_text == text
+        same_positions = [
+            other
+            for other, other_text in enumerate(normalized, start=1)
+            if other != position and other_text and other_text == text
         ]
-        if len(same_names) > 1:
-            problems.append(_duplicate_message(image.name, same_names))
-            has_duplicate = True
-
-        tag_set = set(tags)
-        present = [tag for tag in high_freq if tag in tag_set]
-        if present:
-            shown = "、".join(f'"{tag}"' for tag in present[:5])
-            more = " 等" if len(present) > 5 else ""
-            problems.append(
-                f"标签 {shown}{more} 出现在 >80% 的图上，LoRA 可能把服装/道具学成角色；"
-                "考虑改写进变化词或加入丢弃列表"
-            )
+        if same_positions:
+            problems.append(_duplicate_message(position, same_positions[0]))
             has_duplicate = True
 
         if not problems:
