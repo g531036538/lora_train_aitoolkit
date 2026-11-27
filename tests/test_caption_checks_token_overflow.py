@@ -86,7 +86,7 @@ def test_overflow_beats_duplicate_but_still_one_result():
         assert result.code == "token_overflow"
         assert result.severity == "warn"
         assert "76" in result.message
-        assert "完全一致" in result.message
+        assert "打标词完全相同" in result.message
 
 
 def test_76_identical_tags_dedupe_to_no_report():

@@ -68,7 +68,7 @@ def test_krea2_identity_warn_outranks_duplicate_but_stays_one_result() -> None:
 
     assert len(results) == 2
     assert [result.code for result in results] == ["identity_removed", "identity_removed"]
-    assert all("打标完全一致" in result.message for result in results)
+    assert all("打标词完全相同" in result.message for result in results)
 
 
 def test_krea2_identity_check_does_not_fire_without_raw() -> None:
@@ -134,7 +134,7 @@ def test_moss_unquoted_warn_outranks_duplicate_but_stays_one_result() -> None:
 
     assert len(results) == 2
     assert [result.code for result in results] == ["unquoted_text", "unquoted_text"]
-    assert all("打标完全一致" in result.message for result in results)
+    assert all("打标词完全相同" in result.message for result in results)
 
 
 def test_default_raw_none_keeps_existing_ok_behavior() -> None:
