@@ -46,9 +46,6 @@ CASES: dict[str, CaptionContext] = {
     "sdxl-concept-long": CaptionContext(
         target=TargetModel.SDXL, kind=DatasetKind.CONCEPT, trigger=TRIGGER
     ),
-    "krea2-style-outfit": CaptionContext(
-        target=TargetModel.KREA2, kind=DatasetKind.STYLE, trigger=TRIGGER
-    ),
     "moss-text-layout-json": CaptionContext(
         target=TargetModel.MOSS, kind=DatasetKind.TEXT_LAYOUT, trigger=TRIGGER
     ),
@@ -84,7 +81,7 @@ def test_golden_pairs_are_complete() -> None:
     )
 
 
-def test_golden_cases_cover_every_target_and_match_file_names() -> None:
+def test_golden_cases_match_file_names_and_cover_required_targets() -> None:
     names = _names(IN_SUFFIX)
     assert names == set(CASES), (
         f"目录里的用例和 CASES 登记不一致："
@@ -97,8 +94,10 @@ def test_golden_cases_cover_every_target_and_match_file_names() -> None:
         assert ctx.target is expected_target, f"{name} 的目标是 {ctx.target}，文件名却写的是 {prefix}"
         assert ctx.trigger == TRIGGER, f"{name} 的触发词应统一为 {TRIGGER!r}"
     covered = {ctx.target for ctx in CASES.values()}
-    all_targets = set(_NAME_TARGETS.values())
-    assert covered == all_targets, f"还有目标模型没有黄金用例：{sorted(all_targets - covered)}"
+    # Krea2 的 prose 输出正在改（PR B），它的用例先不钉；SDXL 与 MOSS 必须有。
+    required_targets = {TargetModel.SDXL, TargetModel.MOSS}
+    missing = required_targets - covered
+    assert not missing, f"还有目标模型没有黄金用例：{sorted(missing)}"
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
