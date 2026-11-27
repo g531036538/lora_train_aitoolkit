@@ -127,7 +127,8 @@ def validate_config(cfg: dict, target: TargetModel) -> list[str]:
 
 ```python
 def package(dataset_dir: Path, config_path: Path, out_zip: Path,
-            *, include_images: bool = True) -> ExportReport
+            *, include_images: bool = True,
+            extra_files: Mapping[str, bytes] | None = None) -> ExportReport
 
 @dataclass
 class ExportReport:
@@ -136,9 +137,26 @@ class ExportReport:
     captions: int
     missing_caption: list[str]   # 有图无标的文件名
     orphan_caption: list[str]    # 有标无图的文件名
+    extra_files: list[str]       # 附带文件（目前只有 验收.md）
 ```
 
 导出前必须做一次配对自检，把「有图无标」和「有标无图」都报出来。
+
+**zip 结构（硬性）**：
+
+```
+train.yaml          # 配置，只有这一份，必须在根目录
+验收.md             # 附带文件（可选），也在根目录
+<图集目录名>/        # 数据集单独一层：图 + 同名 .txt 平铺
+```
+
+配置与验收清单**不许写进数据集目录**：那个目录的语义就是「图 + 同名 .txt」，
+扫目录的逻辑不该多一个要排除的条目，用户也不该误以为 `folder_path` 指那里。
+附带文件与根目录已有条目撞名（例如也叫 `train.yaml`）直接报 `ExportError`，不静默覆盖；
+数据集层内部允许同名（那是图与 `.txt` 的正常配对）。
+
+`config_path` 里 `folder_path` / `training_folder` 由 `render_train_config(..., portable=True)`
+写成可移植形式（见 §3），导出只保证「配置里的数据集目录名 == zip 里的目录名」。
 
 ### 4.1 透明底合成（`loraforge/export/flatten.py`）
 
