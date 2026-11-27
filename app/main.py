@@ -32,7 +32,7 @@ from loraforge.configs import (
     render_train_config,
     validate_config_detailed,
 )
-from loraforge.export import ExportError, package, scan_images
+from loraforge.export import BACKGROUNDS, ExportError, flatten_alpha, package, scan_images
 from loraforge.models import PROFILES, DatasetKind, TargetModel
 
 from .markdown import render_markdown
@@ -395,6 +395,10 @@ def index(request: Request) -> HTMLResponse:
             "default_tier": "24",
             "saved": load_state(),
             "offload_max_gb": OFFLOAD_MAX_GB,
+            "backgrounds": [
+                {"key": key, "label": BACKGROUND_LABELS[key], "rgb": list(rgb)}
+                for key, rgb in BACKGROUNDS.items()
+            ],
         },
     )
 
@@ -438,6 +442,85 @@ def scan(dataset_dir: str = Form(...)) -> JSONResponse:
     if not result.images:
         payload["warning"] = "目录里没有 .jpg/.jpeg/.png，打标无从跑起"
     return JSONResponse(payload)
+
+
+#: 纯色底的界面文案；颜色值本身来自 ``loraforge.export.BACKGROUNDS``，不在这里写一遍。
+BACKGROUND_LABELS = {"white": "纯白", "black": "纯黑", "gray": "中性灰"}
+
+
+@app.post("/flatten")
+def flatten(
+    dataset_dir: str = Form(...),
+    out_dir: str = Form(...),
+    background: str = Form("white"),
+) -> JSONResponse:
+    """把带透明通道的图铺到纯色底上，输出 RGB PNG 到新目录；原图一个字节都不动。
+
+    同名 ``.txt`` 逐字节复制过去，图词继续配对；目标目录已有同名文件就报错跳过，
+    既不覆盖，也不许把输出目录指回图集本身。
+    """
+    raw = dataset_dir.strip()
+    if not raw:
+        return _fail("参数", ["图集目录不能为空"])
+    dataset = Path(raw).expanduser()
+    if not dataset.is_dir():
+        return _fail("参数", [f"图集目录不存在：{dataset}"])
+
+    out_raw = out_dir.strip()
+    if not out_raw:
+        return _fail("参数", ["输出目录不能为空；请换一个新目录"])
+    out = Path(out_raw).expanduser()
+    try:
+        dataset_root = dataset.resolve()
+        out_root = out.resolve()
+    except OSError as exc:
+        return _fail("参数", [f"路径解析失败：{exc}"])
+    if out_root == dataset_root:
+        return _fail("参数", ["输出目录不能是图集目录本身：原图不许动，请换一个新目录"])
+
+    key = background.strip().lower() or "white"
+    if key not in BACKGROUNDS:
+        return _fail("参数", [f"未知底色：{background!r}；可选 {'/'.join(BACKGROUNDS)}"])
+
+    try:
+        scan = scan_images(dataset)
+        if not scan.images:
+            return _fail("参数", ["目录里没有 .jpg/.jpeg/.png，没图可合成"])
+        report = flatten_alpha(
+            [entry.path for entry in scan.images],
+            out_root,
+            background=BACKGROUNDS[key],
+            copy_sidecar=True,
+        )
+    except (ExportError, ValueError) as exc:
+        return _fail("参数", [str(exc)])
+
+    copied = sum(
+        1
+        for source, product, _error in report.items
+        if product is not None and Path(source).with_suffix(".txt").is_file()
+    )
+    return JSONResponse(
+        {
+            "ok": report.ok,
+            "dataset_dir": str(dataset_root),
+            "out_dir": str(out_root),
+            "background": key,
+            "rgb": list(BACKGROUNDS[key]),
+            "written": report.written,
+            "failed": report.failed,
+            "copied_captions": copied,
+            "items": [
+                {
+                    "image": Path(source).name,
+                    "product": Path(product).name if product is not None else None,
+                    "error": error,
+                }
+                for source, product, error in report.items
+            ],
+            "note": "原图没有改动（只在新目录里生成 RGB 副本）",
+        }
+    )
 
 
 @app.post("/caption")
