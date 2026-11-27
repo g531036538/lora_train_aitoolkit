@@ -26,6 +26,7 @@ from loraforge.configs import (
     validate_config,
     validate_config_detailed,
 )
+from loraforge.configs.examples import EXAMPLE_PLAN, example_path, render_example
 from loraforge.models import TargetModel
 
 TARGETS = [TargetModel.SDXL, TargetModel.KREA2, TargetModel.MOSS]
@@ -698,31 +699,41 @@ def test_yaml_roundtrip_is_stable(
     assert first == second
 
 
-#: 示例 yaml 使用的路径覆盖（与 .scratch/work/gen_examples.py 保持一致）。
-EXAMPLE_PLAN = {
-    "dataset_dir": "./datasets/my_character",
-    "output_dir": "./output",
-    "trigger": "mychar",
-    "steps": 2500,
-    "sample_prompts": [
-        "[trigger], portrait photo, plain background, soft lighting",
-        "[trigger] walking through a rainy city street at night, neon signs, full body",
-        "portrait photo, plain background, soft lighting",
-    ],
-}
+#: 示例 yaml 的路径覆盖与模板都来自 ``loraforge.configs.examples``（生成器是唯一来源，
+#: 测试不再自己抄一份，否则两边会各自漂移）。
+EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "configs" / "examples"
 
 
 def test_examples_are_built_by_the_builder() -> None:
     """configs/examples/ 里的三份 yaml 必须和 build_config 的输出一致。"""
-    examples = Path(__file__).resolve().parent.parent / "configs" / "examples"
     for target in TARGETS:
-        path = examples / f"{target.value}.yaml"
+        path = example_path(EXAMPLES_DIR, target)
         assert path.exists(), f"缺少示例 {path}"
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
         expected = build_config(target, plan_for_tier(target, "24", **EXAMPLE_PLAN))
         assert loaded == expected, path
         # 示例本身也要过校验，不能出现「示例自己都过不了」
         assert validate_config(loaded, target) == [], path
+
+
+def test_examples_match_generator_bytes() -> None:
+    """示例是生成物：与 ``render_example`` **逐字节**相等。
+
+    上一版只比 ``yaml.safe_load`` 后的 dict，注释块和键顺序完全在测试视野外，
+    手改示例（哪怕只是把 header 里的一句出处写错）不会被发现。这里比原始字节，
+    生成器改一处、示例没重新生成，测试立刻红。
+    """
+    for target in TARGETS:
+        path = example_path(EXAMPLES_DIR, target)
+        assert path.exists(), f"缺少示例 {path}"
+        expected = render_example(target).encode("utf-8")
+        actual = path.read_bytes()
+        assert actual == expected, (
+            f"{path} 与生成器输出不一致：{len(actual)} vs {len(expected)} bytes；"
+            "跑 python .scratch/work/gen_examples.py 重新生成"
+        )
+        # 生成物自己必须是 LF，别让 CRLF 混进仓库（gh.py 直传字节，不经 git）
+        assert b"\r\n" not in actual, f"{path} 含 CRLF"
 
 
 # ---------------------------------------------------------------------------
