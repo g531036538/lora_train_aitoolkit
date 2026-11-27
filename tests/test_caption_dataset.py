@@ -110,6 +110,16 @@ def test_truly_transparent_png_is_flagged_once(tmp_path: Path) -> None:
     assert "3 张图" in issue.message
 
 
+def test_alpha_channel_message_points_to_export_flatten(tmp_path: Path) -> None:
+    # 提示必须指向导出页的「合成到纯色底」动作，别只说「建议合成」。
+    pairs = [(make_image(tmp_path / "0.png", alpha=0), "my_tok, red dress")]
+    issues = analyze_dataset(pairs, ctx())
+    assert codes(issues) == ["alpha_channel"]
+    message = issues[0].message
+    assert "导出页" in message
+    assert "合成到纯色底" in message
+
+
 def test_opaque_alpha_channel_is_not_flagged(tmp_path: Path) -> None:
     """PNG 带 alpha 通道但全 255，不是问题。"""
     pairs = [
