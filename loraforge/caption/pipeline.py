@@ -215,7 +215,9 @@ def run_batch(
                 if not caption or not caption.strip():
                     raise RuntimeError("styler 生成了空打标词")
 
-                out_path.write_text(caption.rstrip() + "\n", encoding="utf-8")
+                # 直接写字节：Windows 的文本模式会把 "\n" 翻成 "\r\n"，
+                # 而这份 .txt 会进训练数据，必须是纯 LF（UTF-8 无 BOM、末尾单换行）。
+                out_path.write_bytes((caption.rstrip() + "\n").encode("utf-8"))
                 written += 1
         except Exception as exc:
             failed += 1
