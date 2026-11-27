@@ -1,6 +1,6 @@
 # 第一个 LoRA：从图集到出图
 
-> 对应 `main` 的 `d9da6418`（2026-11-27）。界面文案、按钮、报错、yaml 字段都按这一版的实际代码写；以后改版以代码为准。
+> 对应 `main` 的 `0df74af4`（2026-11-27）。界面文案、按钮、报错、yaml 字段都按这一版的实际代码写；以后改版以代码为准。
 >
 > 每一步分两段：**你会看到什么**、**看到什么说明出错**。参数不在这份手册里发明——三款模型的完整字段表在 `docs/models/sdxl.md`、`docs/models/krea2.md`、`docs/models/moss_image.md`；训练完怎么判断往哪调，在 `docs/guide/iterating.md`。
 >
@@ -328,7 +328,7 @@ python -m app
 - 「能否导出」：`可以（没有 error）` 或 `不行（存在 error）`；
 - 一行 `步数 / rank / alpha / lr / batch`，一行分辨率；
 - 问题列表：每条 `[severity] code — message`；
-- yaml 全文。
+- yaml 全文。顶部三行是注释（版本、目标模型与档位、触发词），下面才是可改的字段。预览里的这份 yaml 与最终进 zip 的 `train.yaml` **逐字节一致**（`app/main.py:704`、`render_train_config`）。
 
 红项会让「生成 yaml 并导出」按钮变灰，改对之后自动恢复。
 
@@ -477,7 +477,7 @@ datasets:
 
 ## 15. 出处
 
-代码引用（本仓库，`main` `d9da6418`）：
+代码引用（本仓库，`main` `0df74af4`）：
 
 - 界面与按钮：`app/templates/index.html`（六个 section、表单字段、按钮、结果文案）。
 - 启动与端口：`app/__main__.py:7-8`。
