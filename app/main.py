@@ -7,16 +7,20 @@
 
 from __future__ import annotations
 
+import json
+import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Form, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from loraforge.caption.base import CaptionBackend, CaptionContext
+from loraforge.caption.checks import CheckResult, check_captions
 from loraforge.caption.pipeline import BackendInfo, get_backend, list_backends, run_batch
 from loraforge.caption.reasons import human_reason
 from loraforge.configs import (
@@ -24,7 +28,7 @@ from loraforge.configs import (
     build_config,
     default_plan,
     plan_for_tier,
-    validate_config,
+    validate_config_detailed,
 )
 from loraforge.export import ExportError, package, scan_images
 from loraforge.models import PROFILES, DatasetKind, TargetModel
@@ -33,6 +37,35 @@ APP_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 app = FastAPI(title="LoRAForge", version="0.1.0", description="LoRA 打标与训练配置的本地界面")
+
+#: 界面配置存盘格式版本。字段增减时 +1，旧文件按「版本不匹配」拒绝，不猜。
+STATE_SCHEMA = 1
+#: 存盘位置可用环境变量覆盖（测试用；正常用户不该设它）。
+STATE_ENV = "LORAFORGE_UI_STATE"
+#: 这个容量以下开量化，量化 + 全层 offload 同时上会伤导出 LoRA 的推理质量。
+OFFLOAD_MAX_GB = 12
+OFFLOAD_HINT = "量化 + 全层 offload 同时开，已有报告训练正常但导出的 LoRA 推理无效"
+#: 校对页上色的唯一依据；界面不按 code 白名单，新 code 只要带了 severity 就能显示。
+SEVERITY_LABEL = {"error": "红", "warn": "黄", "info": "正常"}
+
+#: 愿意被存进 ui_state.json 的字段：只存表单值，不存图片、路径清单、后端实例。
+STATE_FIELDS = (
+    "model",
+    "vram_tier",
+    "kind",
+    "trigger",
+    "dataset_dir",
+    "backend",
+    "out_zip",
+    "steps",
+    "rank",
+    "alpha",
+    "lr",
+    "batch_size",
+    "include_images",
+    "overwrite",
+    "refresh",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +126,12 @@ def vram_rows() -> list[dict[str, Any]]:
             "batch_size": tier.batch_size,
             "max_resolution": tier.max_resolution,
             "note": tier.note,
+            # 小显存档同时开了量化和 offload：这句是给人看的后果，不只是参数名
+            "offload_hint": (
+                OFFLOAD_HINT
+                if tier.quantize and int(tier.key) <= OFFLOAD_MAX_GB
+                else ""
+            ),
         }
         for tier in VRAM_TIERS.values()
     ]
@@ -146,6 +185,161 @@ def _wanted_images(raw: str, available: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 配置存盘（~/.loraforge/ui_state.json）
+# ---------------------------------------------------------------------------
+
+
+def state_path() -> Path:
+    """配置存盘位置：默认用户主目录，测试用 ``LORAFORGE_UI_STATE`` 指到 .scratch。"""
+    override = os.environ.get(STATE_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".loraforge" / "ui_state.json"
+
+
+def load_state() -> dict[str, Any]:
+    """读回上次保存的表单值。读不到 / 版本不对都如实说，不静默当成空配置。"""
+    path = state_path()
+    if not path.is_file():
+        return {"ok": False, "errors": [f"还没有保存过配置（{path} 不存在）"], "values": {}}
+    try:
+        payload = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {"ok": False, "errors": [f"配置读不出来：{exc}"], "values": {}}
+    if not isinstance(payload, dict):
+        return {"ok": False, "errors": ["配置文件不是 JSON 对象"], "values": {}}
+    schema = payload.get("schema")
+    if schema != STATE_SCHEMA:
+        return {
+            "ok": False,
+            "schema": schema,
+            "errors": [f"配置版本不匹配：文件 schema={schema!r}，界面只认 {STATE_SCHEMA}"],
+            "values": {},
+        }
+    values = payload.get("values") or {}
+    kept = {
+        key: value
+        for key, value in values.items()
+        if key in STATE_FIELDS and isinstance(value, str)
+    }
+    return {
+        "ok": True,
+        "schema": STATE_SCHEMA,
+        "saved_at": payload.get("saved_at"),
+        "values": kept,
+    }
+
+
+def _write_state(values: dict[str, Any]) -> dict[str, Any]:
+    path = state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": STATE_SCHEMA,
+        "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "values": values,
+    }
+    body = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    path.write_bytes(body.encode("utf-8"))
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# 校对 / 参数预览：装配数据，判断全部交给 loraforge
+# ---------------------------------------------------------------------------
+
+
+def _caption_text(path: Path) -> str:
+    """读同名 .txt；没有就是空打标词（不是「跳过」）。"""
+    txt = path.with_suffix(".txt")
+    if not txt.is_file():
+        return ""
+    return txt.read_bytes().decode("utf-8", errors="replace")
+
+
+def review_items(dataset_dir: str, target: TargetModel, ctx: CaptionContext) -> list[dict[str, Any]]:
+    """逐图结果：caption + 句柄 severity + message 原文，界面只按 severity 上色。"""
+    result = scan_images(Path(dataset_dir).expanduser())
+    pairs = [(entry.path, _caption_text(entry.path)) for entry in result.images]
+    checks = {check.image: check for check in check_captions(pairs, ctx)}
+    items: list[dict[str, Any]] = []
+    for entry in result.images:
+        check: CheckResult = checks[entry.path]
+        items.append(
+            {
+                "image": entry.name,
+                "caption": _caption_text(entry.path),
+                "has_caption": entry.has_caption,
+                "code": check.code,
+                "severity": check.severity,
+                "severity_label": SEVERITY_LABEL.get(check.severity, check.severity),
+                "message": check.message,
+            }
+        )
+    return items
+
+
+def severity_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"error": 0, "warn": 0, "info": 0}
+    for item in items:
+        counts[item["severity"]] = counts.get(item["severity"], 0) + 1
+    return counts
+
+
+def _parse_number(raw: str, label: str, cast: type) -> tuple[Any, str | None]:
+    text = str(raw).strip()
+    if not text:
+        return None, None
+    try:
+        value = cast(text)
+    except ValueError:
+        return None, f"{label}不是数字：{raw!r}"
+    return value, None
+
+
+def build_plan_from_form(
+    target: TargetModel,
+    vram_tier: str,
+    *,
+    dataset_dir: str = "",
+    trigger: str = "",
+    output_dir: str = "",
+    steps: str = "",
+    rank: str = "",
+    alpha: str = "",
+    lr: str = "",
+    batch_size: str = "",
+) -> tuple[dict[str, Any], list[str]]:
+    """表单 → ``plan_for_tier``；空字段不传，默认值由库里给，界面不填数。"""
+    overrides: dict[str, Any] = {}
+    errors: list[str] = []
+    if dataset_dir.strip():
+        overrides["dataset_dir"] = dataset_dir.strip()
+    if trigger.strip():
+        overrides["trigger"] = trigger.strip()
+    if output_dir.strip():
+        overrides["output_dir"] = output_dir.strip()
+    for field, raw, cast, label in (
+        ("steps", steps, int, "步数"),
+        ("rank", rank, int, "rank"),
+        ("alpha", alpha, int, "alpha"),
+        ("batch_size", batch_size, int, "batch"),
+        ("lr", lr, float, "学习率"),
+    ):
+        value, error = _parse_number(raw, label, cast)
+        if error:
+            errors.append(error)
+        elif value is not None:
+            overrides[field] = value
+    if errors:
+        return None, errors
+    try:
+        plan = plan_for_tier(target, vram_tier, **overrides)
+    except ValueError as exc:
+        return None, [str(exc)]
+    return plan, []
+
+
+# ---------------------------------------------------------------------------
 # 路由
 # ---------------------------------------------------------------------------
 
@@ -162,6 +356,8 @@ def index(request: Request) -> HTMLResponse:
             "kinds": [kind.value for kind in DatasetKind],
             "default_model": TargetModel.SDXL.value,
             "default_tier": "24",
+            "saved": load_state(),
+            "offload_max_gb": OFFLOAD_MAX_GB,
         },
     )
 
@@ -316,6 +512,221 @@ def caption(
     )
 
 
+@app.post("/review")
+def review(
+    dataset_dir: str = Form(...),
+    model: str = Form(...),
+    kind: str = Form(...),
+    trigger: str = Form(""),
+) -> JSONResponse:
+    """逐图校对：打标词 + 库给出的 severity / message，界面只负责上色与编辑。"""
+    try:
+        target = TargetModel(model)
+    except ValueError:
+        return _fail("参数", [f"未知目标模型：{model!r}"])
+    try:
+        dataset_kind = DatasetKind(kind)
+    except ValueError:
+        return _fail("参数", [f"未知数据集类型：{kind!r}"])
+    raw = dataset_dir.strip()
+    if not raw:
+        return _fail("参数", ["图集目录不能为空"])
+    try:
+        items = review_items(raw, target, CaptionContext(target=target, kind=dataset_kind, trigger=trigger.strip()))
+    except ExportError as exc:
+        return _fail("参数", [str(exc)])
+    if not items:
+        return _fail("参数", [f"目录里没有可校对的图（只认 .jpg/.jpeg/.png）：{Path(raw).expanduser()}"])
+    return JSONResponse(
+        {
+            "ok": True,
+            "root": str(Path(raw).expanduser()),
+            "count": len(items),
+            "summary": severity_counts(items),
+            "items": items,
+        }
+    )
+
+
+@app.post("/caption/save")
+def save_caption(
+    dataset_dir: str = Form(...),
+    image: str = Form(...),
+    caption: str = Form(""),
+    model: str = Form("sdxl"),
+    kind: str = Form("character"),
+    trigger: str = Form(""),
+) -> JSONResponse:
+    """保存一张图的打标词：bytes 写、LF 换行、临时文件 + os.replace。"""
+    raw = dataset_dir.strip()
+    name = image.strip()
+    if not raw or not name:
+        return _fail("参数", ["图集目录与图名都不能为空"])
+    try:
+        scan_result = scan_images(Path(raw).expanduser())
+    except ExportError as exc:
+        return _fail("参数", [str(exc)])
+    entry = next((item for item in scan_result.images if item.name == name), None)
+    if entry is None:
+        return _fail("参数", [f"目录里没有这张图：{name}"])
+
+    try:
+        target = TargetModel(model)
+        dataset_kind = DatasetKind(kind)
+    except ValueError as exc:
+        return _fail("参数", [str(exc)])
+
+    body = caption.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+    txt = entry.path.with_suffix(".txt")
+    tmp = txt.with_name(txt.name + ".tmp")
+    tmp.write_bytes(body.encode("utf-8"))
+    os.replace(tmp, txt)
+    pairs = [(item.path, _caption_text(item.path)) for item in scan_result.images]
+    ctx = CaptionContext(target=target, kind=dataset_kind, trigger=trigger.strip())
+    check = next(check for check in check_captions(pairs, ctx) if check.image == entry.path)
+    return JSONResponse(
+        {
+            "ok": True,
+            "image": name,
+            "txt": str(txt),
+            "bytes": len(body.encode("utf-8")),
+            "check": {
+                "code": check.code,
+                "severity": check.severity,
+                "severity_label": SEVERITY_LABEL.get(check.severity, check.severity),
+                "message": check.message,
+            },
+        }
+    )
+
+
+@app.get("/asset")
+def asset(dataset_dir: str = Query(...), name: str = Query(...)) -> FileResponse:
+    """校对页缩略图：只给图集目录顶层、只给三种图片后缀。"""
+    root = Path(dataset_dir.strip()).expanduser().resolve()
+    if not root.is_dir():
+        return _fail("参数", [f"图集目录不存在：{root}"])
+    # 只认顶层文件名：带任何分隔符或 .. 的直接拒，不让它靠 resolve 碰运气
+    if Path(name).name != name or name in {".", ".."}:
+        return _fail("参数", [f"拒绝读取：{name}"])
+    candidate = (root / name).resolve()
+    if (
+        candidate.parent != root
+        or candidate.suffix.lower() not in {".jpg", ".jpeg", ".png"}
+        or not candidate.is_file()
+    ):
+        return _fail("参数", [f"拒绝读取：{name}"])
+    return FileResponse(candidate)
+
+
+@app.post("/config/preview")
+def preview_config(
+    model: str = Form(...),
+    vram_tier: str = Form("24"),
+    dataset_dir: str = Form(""),
+    trigger: str = Form(""),
+    output_dir: str = Form(""),
+    steps: str = Form(""),
+    rank: str = Form(""),
+    alpha: str = Form(""),
+    lr: str = Form(""),
+    batch_size: str = Form(""),
+) -> JSONResponse:
+    """参数 → plan → config → validate_config_detailed；只有 error 才禁导出。"""
+    try:
+        target = TargetModel(model)
+    except ValueError:
+        return _fail("参数", [f"未知目标模型：{model!r}"])
+    plan, errors = build_plan_from_form(
+        target,
+        vram_tier,
+        dataset_dir=dataset_dir,
+        trigger=trigger,
+        output_dir=output_dir,
+        steps=steps,
+        rank=rank,
+        alpha=alpha,
+        lr=lr,
+        batch_size=batch_size,
+    )
+    if errors:
+        return _fail("参数", errors)
+
+    config = build_config(target, plan)
+    problems = validate_config_detailed(config, target)
+    payload = {
+        "problems": [
+            {"code": problem.code, "severity": problem.severity, "message": problem.message}
+            for problem in problems
+        ],
+    }
+    payload["problem_groups"] = [
+        {
+            "severity": severity,
+            "label": SEVERITY_LABEL[severity],
+            "items": [item for item in payload["problems"] if item["severity"] == severity],
+        }
+        for severity in ("error", "warn", "info")
+    ]
+    return JSONResponse(
+        {
+            "ok": not any(problem["severity"] == "error" for problem in payload["problems"]),
+            "can_export": not any(problem["severity"] == "error" for problem in payload["problems"]),
+            "plan": {
+                "model_path": plan.model_path,
+                "dataset_dir": plan.dataset_dir,
+                "output_dir": plan.output_dir,
+                "trigger": plan.trigger,
+                "steps": plan.steps,
+                "rank": plan.rank,
+                "alpha": plan.alpha,
+                "lr": plan.lr,
+                "batch_size": plan.batch_size,
+                "resolutions": list(plan.resolutions),
+                "vram_gb": plan.vram_gb,
+                "vram_tier": plan.vram_tier if hasattr(plan, "vram_tier") else vram_tier,
+            },
+            "problems": payload["problems"],
+            "problem_groups": payload["problem_groups"],
+            "yaml": yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+        }
+    )
+
+
+@app.get("/state")
+def get_state() -> JSONResponse:
+    return JSONResponse(load_state())
+
+
+@app.post("/state/save")
+async def save_state(request: Request) -> JSONResponse:
+    """存表单值。只收 STATE_FIELDS 里的字符串，别的一律丢掉并说明。"""
+    try:
+        payload = await request.json()
+    except ValueError:
+        return _fail("参数", ["请求体不是 JSON"])
+    values = payload.get("values") if isinstance(payload, dict) else None
+    if not isinstance(values, dict):
+        return _fail("参数", ["values 必须是对象"])
+    kept = {
+        key: str(value)
+        for key, value in values.items()
+        if key in STATE_FIELDS and isinstance(value, (str, int, float)) and not isinstance(value, bool)
+    }
+    dropped = sorted(set(values) - set(kept))
+    saved = _write_state(kept)
+    return JSONResponse(
+        {
+            "ok": True,
+            "schema": saved["schema"],
+            "saved_at": saved["saved_at"],
+            "path": str(state_path()),
+            "saved": sorted(kept),
+            "dropped": dropped,
+        }
+    )
+
+
 @app.post("/export")
 def export_zip(
     dataset_dir: str = Form(...),
@@ -350,10 +761,16 @@ def export_zip(
         return _fail("参数", [str(exc)])
 
     config = build_config(target, plan)
-    hard_errors = validate_config(config, target)
+    problems = validate_config_detailed(config, target)
+    hard_errors = [problem.message for problem in problems if problem.severity == "error"]
     if hard_errors:
         # 危险配置：不生成 yaml、不打包，直接把问题摆出来。
         return _fail("校验", hard_errors)
+    warnings = [
+        {"code": problem.code, "severity": problem.severity, "message": problem.message}
+        for problem in problems
+        if problem.severity != "error"
+    ]
 
     out = Path(out_zip.strip()).expanduser()
     if out.suffix.lower() != ".zip":
@@ -361,9 +778,8 @@ def export_zip(
 
     out.parent.mkdir(parents=True, exist_ok=True)
     config_path = out.parent / "train.yaml"
-    config_path.write_text(
-        yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
+    config_path.write_bytes(
+        yaml.safe_dump(config, allow_unicode=True, sort_keys=False).encode("utf-8")
     )
 
     with_images = include_images.strip().lower() not in {"", "0", "false", "off"}
@@ -383,6 +799,7 @@ def export_zip(
             "orphan_caption": report.orphan_caption,
             "ambiguous": report.ambiguous,
             "with_images": with_images,
+            "warnings": warnings,
         }
     )
 

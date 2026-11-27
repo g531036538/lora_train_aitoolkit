@@ -59,6 +59,39 @@
   .bad-list li { border: 1px solid #5a2a2a; border-radius: 6px; padding: 6px 10px; font-size: 12.5px; }
   .bad-list li b { font-family: ui-monospace, Consolas, monospace; }
   .bad-list li span { display: block; color: #ffb3b3; margin-top: 2px; }
+  .warn-text { color: var(--warn); }
+  .export .row { display: flex; gap: 8px; }
+  #review-note { margin-top: 12px; font-size: 12.5px; color: var(--ok); }
+  .review-list { display: grid; gap: 12px; margin-top: 16px; }
+  .review-item { display: grid; grid-template-columns: 132px 1fr; gap: 14px;
+                 border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px;
+                 padding: 12px 14px; background: #12151b; }
+  .review-item[data-severity=error] { border-left-color: var(--bad); }
+  .review-item[data-severity=warn] { border-left-color: var(--warn); }
+  .review-item[data-severity=info] { border-left-color: var(--ok); }
+  .review-item .thumb img { width: 100%; height: 104px; object-fit: cover; border-radius: 6px;
+                            border: 1px solid var(--line); background: #0d0f14; }
+  .review-item .thumb .miss { display: grid; place-items: center; height: 104px; border-radius: 6px;
+                              border: 1px dashed var(--line); color: var(--muted); font-size: 12px; }
+  .review-item .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .review-item textarea { width: 100%; min-height: 68px; margin-top: 8px; padding: 8px 10px;
+                          border-radius: 6px; border: 1px solid var(--line); background: #0d0f14;
+                          color: var(--ink); font: 12.5px/1.55 ui-monospace, Consolas, monospace;
+                          resize: vertical; }
+  .review-item .msg { color: #ffb3b3; font-size: 12.5px; margin-top: 4px; }
+  .review-item[data-severity=warn] .msg { color: var(--warn); }
+  .review-item[data-severity=info] .msg { color: var(--muted); }
+  .review-item .status { font-size: 12.5px; color: var(--muted); }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .filters button { background: #1b2230; border-color: var(--line); padding: 6px 14px; font-size: 12.5px; }
+  .filters button[aria-pressed=true] { background: #2563eb; border-color: #2d5fa8; }
+  .summary { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; font-size: 13px; }
+  .summary span b { font-family: ui-monospace, Consolas, monospace; }
+  .prob { display: grid; gap: 6px; margin: 12px 0 0; }
+  .prob div { border-left: 3px solid var(--line); padding: 4px 10px; font-size: 12.5px; }
+  .prob div[data-severity=error] { border-left-color: var(--bad); color: #ffb3b3; }
+  .prob div[data-severity=warn] { border-left-color: var(--warn); color: var(--warn); }
+  .prob div[data-severity=info] { border-left-color: var(--ok); color: var(--muted); }
 </style>
 </head>
 <body>
@@ -139,7 +172,7 @@
           <td class="mono">{{ t.quantize }}</td>
           <td class="mono">{{ t.batch_size }}</td>
           <td class="mono">{{ t.max_resolution }}</td>
-          <td class="hint" style="margin:0">{{ t.note }}</td>
+          <td class="hint" style="margin:0">{{ t.note }}{% if t.offload_hint %}<br><span class="warn-text">{{ t.offload_hint }}</span>{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -197,6 +230,10 @@
         <input type="checkbox" id="cap_overwrite" name="overwrite" value="1" checked>
         <label for="cap_overwrite" style="margin:0">覆盖已有 .txt（不勾则跳过已有标注）</label>
       </div>
+      <div class="check">
+        <input type="checkbox" id="cap_refresh" name="refresh" value="1">
+        <label for="cap_refresh" style="margin:0">重建后端（换了模型权重就勾上，否则会拿旧 session 打新图）</label>
+      </div>
       <div class="actions">
         <button type="submit" id="cap-btn">开始打标</button>
         <span class="hint" style="margin:0">单张失败不中断整批</span>
@@ -205,46 +242,106 @@
     </form>
   </section>
 
-  <section aria-labelledby="export-title">
-    <h2 id="export-title">导出</h2>
-    <p class="hint">按表单参数生成 yaml → <code>validate_config</code> 有硬错就拒绝 → <code>package()</code> 打包；缺打标词与孤儿 txt 会在结果里逐条列出。</p>
+  <section aria-labelledby="review-title">
+    <h2 id="review-title">逐张校对</h2>
+    <p class="hint">问题只按 <code>severity</code> 上色（error 红 / warn 黄 / info 正常），不存在「某几种 code 才标红」的白名单；原因直接显示 <code>check_captions()</code> 给的 <code>message</code> 原文。改完点「保存这张」立即写回同名 <code>.txt</code>。</p>
+    <form class="export" id="review-form">
+      <div>
+        <label for="review_dir">图集目录</label>
+        <input type="text" id="review_dir" name="dataset_dir" placeholder="与打标时同一个目录" required>
+      </div>
+      <div>
+        <label for="review_model">目标模型</label>
+        <select id="review_model" name="model">
+          {% for m in models %}<option value="{{ m.key }}">{{ m.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="review_kind">数据集类型</label>
+        <select id="review_kind" name="kind">
+          {% for kind in kinds %}<option value="{{ kind }}">{{ kind }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="review_trigger">触发词</label>
+        <input type="text" id="review_trigger" name="trigger" placeholder="mytoken">
+      </div>
+      <div class="actions">
+        <button type="submit" id="review-btn">载入校对</button>
+        <span class="hint" style="margin:0">空打标词 / 缺触发词必红；标签过少 / 多图雷同标黄</span>
+      </div>
+    </form>
+    <div id="review-out" role="status" aria-live="polite"></div>
+  </section>
+
+  <section aria-labelledby="params-title">
+    <h2 id="params-title">训练参数与导出</h2>
+    <p class="hint">参数默认值全部来自 <code>default_plan()</code> / <code>VRAM_TIERS</code>（留空即用库的默认），校验走 <code>validate_config_detailed</code>：只有存在 <code>severity=error</code> 的项才禁止导出，warn 会照常显示但仍可导出。</p>
     <form class="export" id="export-form">
       <div>
         <label for="dataset_dir">图集目录（本机绝对路径）</label>
-        <input type="text" id="dataset_dir" name="dataset_dir" placeholder="D:\\datasets\\my_character" required>
+        <input type="text" id="dataset_dir" name="dataset_dir" placeholder="D:\datasets\my_character"
+               value="{{ saved['values'].get('dataset_dir', '') }}" required>
       </div>
       <div>
         <label for="out_zip">导出 zip 路径</label>
-        <input type="text" id="out_zip" name="out_zip" placeholder="D:\\datasets\\my_character.zip" required>
+        <input type="text" id="out_zip" name="out_zip" placeholder="D:\datasets\my_character.zip"
+               value="{{ saved['values'].get('out_zip', '') }}" required>
       </div>
       <div>
         <label for="model">目标模型</label>
         <select id="model" name="model">
           {% for m in models %}
-          <option value="{{ m.key }}" {{ 'selected' if m.key == default_model else '' }}>{{ m.label }}</option>
+          <option value="{{ m.key }}" {{ 'selected' if m.key == saved['values'].get('model', default_model) else '' }}>{{ m.label }}</option>
           {% endfor %}
         </select>
       </div>
       <div>
         <label for="trigger">触发词</label>
-        <input type="text" id="trigger" name="trigger" placeholder="mytoken" required>
+        <input type="text" id="trigger" name="trigger" placeholder="mytoken"
+               value="{{ saved['values'].get('trigger', '') }}" required>
       </div>
       <div>
         <label for="vram_tier">显存档位</label>
         <select id="vram_tier" name="vram_tier">
           {% for t in tiers %}
-          <option value="{{ t.key }}" {{ 'selected' if t.key == default_tier else '' }}>{{ t.label }}</option>
+          <option value="{{ t.key }}" {{ 'selected' if t.key == saved['values'].get('vram_tier', default_tier) else '' }}>{{ t.label }}</option>
           {% endfor %}
         </select>
+      </div>
+      <div>
+        <label for="steps">训练步数（留空 = 库默认）</label>
+        <input type="text" id="steps" name="steps" placeholder="留空取 default_plan() 的值"
+               value="{{ saved['values'].get('steps', '') }}">
+      </div>
+      <div>
+        <label for="rank">rank / alpha（留空 = 库默认）</label>
+        <div class="row">
+          <input type="text" id="rank" name="rank" placeholder="rank" value="{{ saved['values'].get('rank', '') }}">
+          <input type="text" id="alpha" name="alpha" placeholder="alpha" value="{{ saved['values'].get('alpha', '') }}">
+        </div>
+      </div>
+      <div>
+        <label for="lr">学习率（留空 = 库默认）</label>
+        <input type="text" id="lr" name="lr" placeholder="1e-4"
+               value="{{ saved['values'].get('lr', '') }}">
+      </div>
+      <div>
+        <label for="batch_size">批量（留空 = 按档位）</label>
+        <input type="text" id="batch_size" name="batch_size" placeholder="按显存档位"
+               value="{{ saved['values'].get('batch_size', '') }}">
       </div>
       <div class="check">
         <input type="checkbox" id="include_images" name="include_images" value="1" checked>
         <label for="include_images" style="margin:0">把训练图一起打进 zip</label>
       </div>
       <div class="actions">
+        <button type="button" id="preview-btn">预览配置与校验</button>
         <button type="submit" id="submit-btn">生成 yaml 并导出</button>
-        <span class="hint" style="margin:0">校验不过不会生成任何文件</span>
+        <button type="button" id="state-save">保存当前配置</button>
+        <button type="button" id="state-load">载入上次配置</button>
       </div>
+      <div class="hint" id="state-note" style="grid-column:1/-1;margin:0"></div>
       <div id="result" role="status" aria-live="polite"></div>
     </form>
   </section>
@@ -412,16 +509,339 @@
       .then(function () { btn.disabled = false; });
   });
 
-  // ---- 导出 --------------------------------------------------------------
+  // ---- 逐张校对 ----------------------------------------------------------
+  (function () {
+    var form = document.getElementById("review-form");
+    var out = document.getElementById("review-out");
+    var state = { items: [], filter: "all", ctx: null };
+    var SEVERITY_CLASS = { error: "bad", warn: "warn", info: "ok" };
+
+    function badge(item) {
+      var tag = document.createElement("span");
+      tag.className = "tag " + (SEVERITY_CLASS[item.severity] || "warn");
+      tag.textContent = item.severity_label + " · " + item.code;
+      return tag;
+    }
+
+    function syncEdits() {
+      out.querySelectorAll(".review-item").forEach(function (article) {
+        var area = article.querySelector("textarea");
+        var name = article.getAttribute("data-image");
+        state.items.forEach(function (item) {
+          if (item.image === name && area) { item.caption = area.value; }
+        });
+      });
+    }
+
+    function render() {
+      out.textContent = "";
+      var shown = state.items.filter(function (item) {
+        if (state.filter === "all") { return true; }
+        if (state.filter === "problems") { return item.severity !== "info"; }
+        return item.severity === state.filter;
+      });
+      var counts = { error: 0, warn: 0, info: 0 };
+      state.items.forEach(function (item) { counts[item.severity] = (counts[item.severity] || 0) + 1; });
+      var summary = document.createElement("div");
+      summary.className = "summary";
+      [["error", "红"], ["warn", "黄"], ["info", "正常"]].forEach(function (pair) {
+        var span = document.createElement("span");
+        span.textContent = pair[1] + " ";
+        var num = document.createElement("b");
+        num.textContent = String(counts[pair[0]] || 0);
+        span.appendChild(num);
+        summary.appendChild(span);
+      });
+      out.appendChild(summary);
+      if (state.note) {
+        var note = document.createElement("div");
+        note.id = "review-note";
+        note.textContent = state.note;
+        out.appendChild(note);
+      }
+
+      var filters = document.createElement("div");
+      filters.className = "filters";
+      [["all", "全部"], ["problems", "仅问题"], ["error", "仅红"], ["warn", "仅黄"]].forEach(function (pair) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = pair[1];
+        btn.setAttribute("aria-pressed", String(state.filter === pair[0]));
+        btn.addEventListener("click", function () { state.filter = pair[0]; render(); });
+        filters.appendChild(btn);
+      });
+      out.appendChild(filters);
+
+      var list = document.createElement("div");
+      list.className = "review-list";
+      if (!shown.length) {
+        var empty = document.createElement("p");
+        empty.className = "empty";
+        empty.textContent = "没有符合条件的图。";
+        list.appendChild(empty);
+      }
+      shown.forEach(function (item) {
+        list.appendChild(card(item));
+      });
+      out.appendChild(list);
+    }
+
+    function card(item) {
+      var article = document.createElement("article");
+      article.className = "review-item";
+      article.setAttribute("data-severity", item.severity);
+      article.setAttribute("data-image", item.image);
+
+      var thumb = document.createElement("div");
+      thumb.className = "thumb";
+      if (item.has_caption) {
+        var img = document.createElement("img");
+        img.alt = item.image;
+        img.loading = "lazy";
+        img.src = "/asset?dataset_dir=" + encodeURIComponent(state.ctx.dataset_dir) +
+                  "&name=" + encodeURIComponent(item.image);
+        thumb.appendChild(img);
+      } else {
+        var miss = document.createElement("div");
+        miss.className = "miss";
+        miss.textContent = "缺 .txt";
+        thumb.appendChild(miss);
+      }
+
+      var body = document.createElement("div");
+      var row = document.createElement("div");
+      row.className = "row";
+      var name = document.createElement("b");
+      name.textContent = item.image;
+      row.appendChild(name);
+      row.appendChild(badge(item));
+      if (item.dirty) {
+        var dirty = document.createElement("span");
+        dirty.className = "tag warn";
+        dirty.textContent = "未保存改动";
+        row.appendChild(dirty);
+      }
+      body.appendChild(row);
+
+      var msg = document.createElement("div");
+      msg.className = "msg";
+      msg.textContent = item.message;
+      body.appendChild(msg);
+
+      var area = document.createElement("textarea");
+      area.value = item.caption;
+      area.rows = 3;
+      area.spellcheck = false;
+      area.addEventListener("input", function () {
+        item.dirty = true;
+        area.setAttribute("data-dirty", "1");
+      });
+      if (item.dirty) { area.setAttribute("data-dirty", "1"); }
+      body.appendChild(area);
+
+      var row2 = document.createElement("div");
+      row2.className = "row";
+      var save = document.createElement("button");
+      save.type = "button";
+      save.textContent = "保存这张";
+      var status = document.createElement("span");
+      status.className = "status";
+      save.addEventListener("click", function () {
+        save.disabled = true;
+        status.textContent = "保存中…";
+        var payload = new FormData();
+        payload.set("dataset_dir", state.ctx.dataset_dir);
+        payload.set("image", item.image);
+        payload.set("caption", area.value);
+        payload.set("model", state.ctx.model);
+        payload.set("kind", state.ctx.kind);
+        payload.set("trigger", state.ctx.trigger);
+        post("/caption/save", payload)
+          .then(function (res) {
+            var data = res.data;
+            if (!data.ok) {
+              status.textContent = "";
+              status.style.color = "#ff6b6b";
+              status.textContent = (data.errors || ["保存失败"]).join("；");
+              return;
+            }
+            item.caption = area.value;
+            item.dirty = false;
+            item.check = data.check;
+            status.style.color = "#3ddc97";
+            status.textContent = "已写入 " + data.bytes + " 字节：" + data.txt;
+            state.note = item.image + " 已保存（" + data.bytes + " 字节，LF）→ " + data.txt;
+            // 保存后按库重新判级：severity 可能变了；先同步其它卡片里未保存的编辑
+            return recheck();
+          })
+          .catch(function (err) {
+            status.style.color = "#ff6b6b";
+            status.textContent = "请求失败：" + String(err);
+          })
+          .then(function () { save.disabled = false; });
+      });
+      var recheck = function () {
+        syncEdits();
+        var local = {};
+        state.items.forEach(function (item) { local[item.image] = item; });
+        return post("/review", formData()).then(function (again) {
+          if (!again.data.ok) { return; }
+          // 服务端只认识已落盘的内容；别的卡片里还没保存的编辑不能被它覆盖
+          state.items = again.data.items.map(function (fresh) {
+            var mine = local[fresh.image];
+            if (mine && mine.dirty && mine.caption !== fresh.caption) {
+              fresh.caption = mine.caption;
+              fresh.dirty = true;
+            }
+            return fresh;
+          });
+          render();
+        });
+      };
+      row2.appendChild(save);
+      row2.appendChild(status);
+      body.appendChild(row2);
+
+      article.appendChild(thumb);
+      article.appendChild(body);
+      return article;
+    }
+
+    function formData() {
+      var body = new FormData();
+      body.set("dataset_dir", state.ctx.dataset_dir);
+      body.set("model", state.ctx.model);
+      body.set("kind", state.ctx.kind);
+      body.set("trigger", state.ctx.trigger);
+      return body;
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var btn = document.getElementById("review-btn");
+      var body = new FormData(form);
+      btn.disabled = true;
+      out.textContent = "读取中…";
+      state.ctx = {
+        dataset_dir: body.get("dataset_dir"),
+        model: body.get("model"),
+        kind: body.get("kind"),
+        trigger: body.get("trigger") || ""
+      };
+      state.filter = "all";
+      post("/review", body)
+        .then(function (res) {
+          var data = res.data;
+          if (!data.ok) {
+            out.textContent = "";
+            out.appendChild(failures("校对加载失败（" + data.stage + "）", data.errors || ["未知错误"]));
+            return;
+          }
+          state.items = data.items;
+          render();
+        })
+        .catch(function (err) { out.textContent = ""; out.appendChild(line("请求失败", String(err), "#ff6b6b")); })
+        .then(function () { btn.disabled = false; });
+    });
+  })();
+
+  // ---- 参数预览 / 导出 / 配置存盘 -----------------------------------------
   (function () {
     var form = document.getElementById("export-form");
     var out = document.getElementById("result");
     var btn = document.getElementById("submit-btn");
+    var previewBtn = document.getElementById("preview-btn");
+    var stateNote = document.getElementById("state-note");
+
+    function fields() {
+      var body = new FormData(form);
+      if (!body.get("include_images")) { body.set("include_images", "0"); }
+      return body;
+    }
+
+    function problemList(data) {
+      var box = document.createElement("div");
+      box.className = "prob";
+      data.problems.forEach(function (problem) {
+        var row = document.createElement("div");
+        row.setAttribute("data-severity", problem.severity);
+        row.textContent = "[" + problem.severity + "] " + problem.code + " — " + problem.message;
+        box.appendChild(row);
+      });
+      return box;
+    }
+
+    previewBtn.addEventListener("click", function () {
+      var body = fields();
+      previewBtn.disabled = true;
+      out.textContent = "校验中…";
+      post("/config/preview", body)
+        .then(function (res) {
+          var data = res.data;
+          out.textContent = "";
+          if (data.errors) {
+            out.appendChild(failures("参数有误（" + data.stage + "）", data.errors));
+            return;
+          }
+          out.appendChild(line("能否导出", data.can_export ? "可以（没有 error）" : "不行（存在 error）",
+                               data.can_export ? "#3ddc97" : "#ff6b6b"));
+          out.appendChild(line("步数 / rank / alpha / lr / batch",
+                               data.plan.steps + " / " + data.plan.rank + " / " + data.plan.alpha +
+                               " / " + data.plan.lr + " / " + data.plan.batch_size));
+          out.appendChild(line("分辨率", data.plan.resolutions.join(" / ")));
+          out.appendChild(problemList(data));
+          var pre = document.createElement("pre");
+          pre.textContent = data.yaml;
+          out.appendChild(pre);
+          btn.disabled = !data.can_export;
+        })
+        .catch(function (err) { out.textContent = ""; out.appendChild(line("请求失败", String(err), "#ff6b6b")); })
+        .then(function () { previewBtn.disabled = false; });
+    });
+
+    document.getElementById("state-save").addEventListener("click", function () {
+      var body = fields();
+      var values = {};
+      ["model", "vram_tier", "dataset_dir", "trigger", "out_zip", "steps", "rank",
+       "alpha", "lr", "batch_size"].forEach(function (key) {
+        values[key] = String(body.get(key) || "");
+      });
+      values.include_images = body.get("include_images") || "0";
+      values.backend = document.getElementById("cap_backend").value;
+      var refresh = document.getElementById("cap_refresh");
+      values.refresh = refresh && refresh.checked ? "1" : "0";
+      var overwrite = document.getElementById("cap_overwrite");
+      values.overwrite = overwrite && overwrite.checked ? "1" : "0";
+      fetch("/state/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values: values })
+      }).then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          stateNote.textContent = data.ok
+            ? "已保存 schema=" + data.schema + " → " + data.path + "（丢弃 " + data.dropped.length + " 个非表单字段）"
+            : "保存失败：" + (data.errors || []).join("；");
+        })
+        .catch(function (err) { stateNote.textContent = "保存失败：" + String(err); });
+    });
+
+    document.getElementById("state-load").addEventListener("click", function () {
+      fetch("/state").then(function (resp) { return resp.json(); }).then(function (data) {
+        if (!data.ok) {
+          stateNote.textContent = "没有可用的上次配置：" + (data.errors || []).join("；");
+          return;
+        }
+        Object.keys(data.values).forEach(function (key) {
+          var el = form.elements[key];
+          if (el) { el.value = data.values[key]; }
+        });
+        stateNote.textContent = "已载入 " + (data.saved_at || "上次保存") + " 的配置（schema=" + data.schema + "）";
+      }).catch(function (err) { stateNote.textContent = "载入失败：" + String(err); });
+    });
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      var body = new FormData(form);
-      if (!body.get("include_images")) { body.set("include_images", "0"); }
+      var body = fields();
       btn.disabled = true;
       out.textContent = "导出中…";
       post("/export", body)
@@ -439,6 +859,18 @@
           if (data.missing_caption.length) { out.appendChild(list("缺打标词的图", data.missing_caption, "#ff6b6b")); }
           if (data.orphan_caption.length) { out.appendChild(list("没有对应图的 txt", data.orphan_caption, "#ffc75f")); }
           if (data.ambiguous && data.ambiguous.length) { out.appendChild(list("同名冲突", data.ambiguous, "#ff6b6b")); }
+          if (data.warnings && data.warnings.length) {
+            var wbox = document.createElement("div");
+            wbox.className = "prob";
+            data.warnings.forEach(function (item) {
+              var row = document.createElement("div");
+              row.setAttribute("data-severity", item.severity);
+              row.textContent = "[" + item.severity + "] " + item.code + " — " + item.message;
+              wbox.appendChild(row);
+            });
+            out.appendChild(line("校验提醒（不阻止导出）", String(data.warnings.length), "#ffc75f"));
+            out.appendChild(wbox);
+          }
         })
         .catch(function (err) {
           out.textContent = "";
