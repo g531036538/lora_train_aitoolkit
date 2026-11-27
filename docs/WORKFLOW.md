@@ -134,6 +134,8 @@ python -c "import hashlib,sys;[print(p, len(open(p,'rb').read()), sum(1 for _ in
 - **不要用 `tmp_path`**。本机系统临时目录落在沙箱可写范围外，会报 `could not create numbered dir with prefix pytest-`。用 `tests/conftest.py` 里的 `scratch` fixture（仓库内 `.scratch/`，自动清理），或者 `images` fixture 拿三张假图片。
 - **不要断言控制台打印**。本机 locale 不是 UTF-8，中文 print 出来是乱码，但数据本身可能是对的。要看内容就写文件再用 read 工具读。
 
+- **检出后先查有没有反斜杠路径**。仓库曾有一批名字里含 `\` 的重复文件（`'loraforge\configs\base.py'` 这种），是早期提交路径没过正常分隔符留下的。在 Windows 上它们与真实文件**同路径、互相覆盖**，检出后你看到的是旧内容，测试会莫名变红。已在 `33373565` 从主分支删除；此后拉代码若发现某文件内容不对，先查这个。拉树时跳过路径里含 `\` 的条目。
+
 ## 7. 什么算「完成」
 
 - 代码在分支上，测试本地跑通，输出贴进 PR
