@@ -4,7 +4,7 @@
 >
 > 适用范围：`TargetModel.MOSS_IMAGE` → `build_config()` 产出的 `job: extension / process[type=sd_trainer]` YAML。
 >
-> **先读这条**：MOSS-Image 是「单流 42 层 DiT + Qwen3.5-9B 文本 + FLUX.2 VAE」，5B 量级，flow matching。官方**明确 Base 就是给社区训 LoRA 的**（没做 CFG 蒸馏），也明确**训练时 TE 必须冻结**。注意调度器：**预训练 timestep 是 logit-normal、shift 5.0 只在推理时加**（kohya 官方文档复刻口径），而 ai-toolkit 的 `shift` 分支固定用 5.0、也没有 logit-normal 采样 → 训练侧 `timestep_type` 只能取近似（见 ③）。文本长度上限 4096 token，是全项目最长的一档。
+> **先读这条**：MOSS-Image 是「单流 42 层 DiT + Qwen3.5-9B 文本 + FLUX.2 VAE」，5B 量级，flow matching。官方 `USERGUIDE.md:5` 明确**Base 就是给社区训 LoRA 的**（未做 CFG 等推理后训练/蒸馏），`:126-132` 明确**训练时 TE 必须冻结**。注意调度器：**技术报告 Stage 3 末期是 shift=1 网格 + 截断 logit-normal（μ=−1.09, s=0.95, cutoff 0.95, 掺 1% 均匀），shift 5.0 只在推理时加**（`arXiv:2610.23374` Table 2，2026-11-27 读全文）；ai-toolkit 没有 logit-normal 分支、`shift` 又固定 5.0 → 训练侧 `timestep_type` 只能取近似，默认 `shift`（判据见 ③）。文本长度上限 4096 token，是全项目最长的一档。
 
 ---
 
@@ -79,7 +79,7 @@ config:
           cache_latents_to_disk: true
       train:
         noise_scheduler: flowmatch      # ← 必写，否则 timestep_type 失效
-        timestep_type: linear           # ai-toolkit 无 logit-normal 采样；见 ③ 的三选一说明
+        timestep_type: shift            # 最接近官方末期 σ 分布的可选项；判据见 ③（无 logit-normal 分支）
         lr: 1e-4
         steps: 2500
       model:
@@ -176,10 +176,10 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 
 | 参数 | 起点值 | 为什么 |
 |---|---|---|
-| `model.name_or_path` | `OpenMOSS-Team/MOSS-Image-Base` | 官方说 Base 未做 CFG 等推理后训练，就是留给社区训 LoRA 的；SFT 版用于出图/验收（`README.md` + `USERGUIDE.md`） |
+| `model.name_or_path` | `OpenMOSS-Team/MOSS-Image-Base` | 官方 `USERGUIDE.md:5` 原文：Base 未做 CFG 等推理后训练/蒸馏，「…to make it easier for the community to train LoRAs」；`:126-132` 的 Post-Training 整节只针对 Base 讲 LoRA（并要求冻结 TE）；`README.md:143` 写 SFT =「Fine-tuned from MOSS-Image-Base on curated data」。**ai-toolkit registry 的 `moss_image` 预置指向 SFT 是推理默认，不是训练底座**（`registry.py:59-60`）→ 训练配置必须写 Base，SFT 只用于出图/验收 |
 | `model.arch` | `moss_image`（必写） | 不写落到 `sd1`（`config_modules.py:809-831`） |
 | `train.noise_scheduler` | `flowmatch`（必写） | 见 ② 硬约束 ① |
-| `train.timestep_type` | `linear`（保底）；`shift` 仅做对照 | **官方预训练分布不是固定 shift**：kohya 文档复刻为 truncated logit-normal(mean −1.09, std 0.95)、1000 步网格无 shift、截断 0.95、混 1% 均匀；简洁近似是 `shift` + `discrete_flow_shift 3.0`，而 **shift 5.0 只在推理时加**（`kohya-ss/sd-scripts docs/moss_image_train_network.md`）。ai-toolkit 没有 logit-normal 分支，`shift` 又固定 `self.shift=5.0`（比 3.0 更偏噪声侧）→ 首轮取 `linear` 保底，`shift`/`sigmoid` 各做一组对照。**均需实测**，标 `UNVERIFIED` |
+| `train.timestep_type` | `shift`（近似，标 `UNVERIFIED`） | 官方配方在技术报告 **`arXiv:2610.23374` Table 2**：Stage 3 末期（274k–310k 步）是 **shift=1 网格 + 截断 logit-normal（μ=−1.09, s=0.95, cutoff 0.95）+ 1% 均匀**，只有最早 140k 步用 shift=3；kohya 文档复刻的是同一分布。**判据（可复算，不靠偏好）**：训练 σ 要贴近末期分布——按论文公式采样 4M 次得中位 **0.741**、IQR **0.601–0.842**（P10/P25/P50/P75/P90 = 0.456/0.601/0.741/0.842/0.899）。ai-toolkit 三个现成选项：`linear` 分位 0.10/0.25/0.50/0.75/0.90、`sigmoid` 0.217/0.337/0.50/0.662/0.783、`shift`（`self.shift=5.0`）0.357/0.625/0.833/0.937/0.978 → 对末期分布的分位 L1 距离：**`shift` 0.39**、`linear` 1.04、`sigmoid` 1.04。所以 `shift` 是唯一同向且量级接近的选项；`linear`/`sigmoid` 把约一半训练步放在 σ≤0.5 的低噪声区，而末期预训练只有约 1/4 的步在那里。仍不是官方配方：ai-toolkit 无 logit-normal 分支、`shift` 系数写死 5.0（kohya 用 3.0 近似，中位正好 0.75）→ 保留 UNVERIFIED，界面提示 A/B 自测 | `arXiv:2610.23374` Table 2 + 式 (4)（§10.1）；`toolkit/samplers/custom_flowmatch_sampler.py:111-235`；`moss_image.py:74,204`；kohya `docs/moss_image_train_network.md` |
 | `network.linear` / `linear_alpha` | `32` / `32` | 契约默认（`docs/ARCHITECTURE.md:100-101`）。MOSS 无二手校准，沿用项目默认 |
 | `train.steps` | `2500` | 契约默认（`:99`）。注意 `resolution` 列表会复制数据集，steps 要按公式换算 |
 | `train.lr` | `1e-4` | 契约默认（`:102`）；源码默认 `1e-6`（`config_modules.py:387`） |
@@ -288,6 +288,7 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 5. **布局验收（仅 `TEXT_LAYOUT` 档）**：按 ① 官方 schema 生成一张含 2–3 个 item 的布局 prompt，核对元素落位；坐标与请求宽高必须匹配。
 6. **步数 sanity**：每 epoch 样本数 = 张数 × `num_repeats` × `len(resolutions)`。
 7. **背景/主体发糊单独记一项**：同一 prompt 用**未加 LoRA 的 Base** 也出一张对照。若基线就糊 → 模型侧现象（社区两个独立报告，官方未解释），不能记成「LoRA 训坏」；若只在 LoRA 后出现 → 才是训练问题。
+8. **timestep 对照**：固定数据与种子，`timestep_type: shift`（默认）与 `linear` 各跑 600–800 步，比文字渲染（MOSS 的强项）与背景/主体清晰度；若 `linear` 明显更好，说明 ③ 的 σ 分布判据方向有误，应回到论文 Table 2 重新标定。
 8. **caption 长度成本**：记录平均 caption token 数与 s/step。单流结构下步时随 `(N_img+N_txt)²` 涨，长 caption 导致的变慢先截断 caption 再怀疑配置（一手实测，见社区证据）。
 
 ---
@@ -298,7 +299,7 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 |---|---|---|---|
 | 1 | 精确参数量与各组件权重体积 | HF model card 已于 2026-11-27 取得（`sources.md` §8.1）：确认 5B backbone、42 层、Qwen3.5-9B、FLUX.2 VAE、dtype 口径、Sampling 默认表、两种 forward 口径；仍缺 `config.json` 的精确参数量和 safetensors 分片大小 | 读 HF `config.json` / safetensors index（`urllib` 可达，无需登录） |
 | 2 | 布局 JSON 在**训练** caption 里的正确用法 | 格式已是官方 schema（不再 UNVERIFIED），但 ai-toolkit 不解析；官方未说明训练时该用哪种 caption 形态 | 官方 issue/示例，或训练对照实验 |
-| 3 | `timestep_type` 该用哪档 | 官方预训练是 logit-normal（kohya 复刻），ai-toolkit 无此分支；`shift` 固定 5.0，比官方近似值 3.0 更偏噪声侧 | 同数据跑 `linear`/`shift`/`sigmoid` 三组，比样图的细节与文字清晰度 |
+| 3 | `timestep_type` 该用哪档 | 官方配方已知（`arXiv:2610.23374` Table 2：末期 shift=1 网格 + 截断 logit-normal μ=−1.09/s=0.95/cutoff 0.95 + 1% 均匀；σ 中位 0.741、IQR 0.601–0.842）。ai-toolkit 无 logit-normal，`shift` 系数写死 5.0；按 σ 分位距离 `shift`（0.39）远优于 `linear`/`sigmoid`（各 1.04）→ 默认 `shift`，但**不是官方配方** | 同数据 600–800 步 `shift` vs `linear` 对照：文字渲染、结构、loss 曲线；以及「背景/主体发糊」是否随 timestep 分布变化 |
 | 4 | 24GB 是否需要 `quantize`、`convrot8` 训练可用性 | 注册表只证明推理可用 | 24GB 实跑记峰值显存 + 出图对比 |
 | 5 | MOSS 的 `lr=1e-4`/`rank=32`/2500 步 | 契约默认，无任何二手校准 | 对照训练 |
 | 6 | `uncond_skip_layers` 在**训练**时是否该设 | 官方推荐 22 是推理口径；训练侧代码未见使用（`src/pipeline.py:20`、`moss_image.py:407`） | 读训练 loss 路径确认是否触发 uncond 分支 |

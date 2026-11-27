@@ -36,7 +36,7 @@
   - 负向词建议：`nsfw, worst quality, bad anatomy, watermark, jpeg artifact`
   - 标签序列顺序：Quality→Score→Meta→Year→Character→Series→Artist→General
   - 显存：1024×1024 / 50 步峰值 GPU 3.65/3.85 GiB（含 offload）、系统内存 14 GiB
-  - License：pipeline Apache 2.0；技术报告 arXiv 2610.23374（**未访问**）
+  - License：pipeline Apache 2.0；技术报告 arXiv 2610.23374（2026-11-27 已读 HTML 全文，见 §10.1）
 
 ## 3. SGLang Krea 2 部署 cookbook（第三方官方，部署实测）
 
@@ -180,6 +180,35 @@
 
 ---
 
+## 10. 训练噪声采样与训练底座（2026-11-27 新增）
+
+### 10.1 MOSS 技术报告（一手，官方）
+
+| 项 | 内容 | 可信度 |
+|---|---|---|
+| URL | `https://arxiv.org/html/2610.23374v1`（HTML 全文；`_src/arxiv-2610.23374-html.html` 433,863 B） | **官方论文** |
+| 访问 | 2026-11-27，`urllib` + UA，HTTP 200 | |
+| 关键口径 | Stage 3 的噪声采样分四段：1–140,000 步 = grid shift 3 + logit-normal(0,1)；140,001–207,000 = shift 1 + (−1.45,1.05)；207,001–274,000 = shift 1 + (−1.45,1.05) + cutoff 0.95；末期 274,001–310,000 = shift 1 + **截断 logit-normal（μ=−1.09, s=0.95）、cutoff 0.95、掺 1% 均匀**。`Z~N(μ,s²)`，`S=1−sigmoid(Z)`，`σ_j=j/T`，`p_j=(1−ρ)·[F(aj/T)−F(a(j−1)/T)]/F(a)+ρ/T`。**loss 不按 σ/SNR 加权**，文本 token 不参与预测 loss | 原文 Table 2 + 式 (4) |
+| 用途 | 决定 `timestep_type` 的判据（σ 分布），见 `moss_image.md` ③ | |
+
+### 10.2 MOSS 官方仓库 README / USERGUIDE（一手，官方）
+
+| 项 | 内容 | 可信度 |
+|---|---|---|
+| URL | `https://raw.githubusercontent.com/OpenMOSS/MOSS-Image/main/README.md`（17,403 B）、`.../USERGUIDE.md`（10,183 B） | **官方文档** |
+| 访问 | 2026-11-27，HTTP 200 | |
+| 底座口径 | `USERGUIDE.md:5`：「As a base model, MOSS-Image-Base has not undergone any post-training or distillation of inference parameters such as CFG… to make it easier for the community to train LoRAs.」；`:126-132`「If you post-train MOSS-Image-Base yourself, keep the text encoder frozen.」；`README.md:143`：SFT =「Fine-tuned from MOSS-Image-Base on curated data」；`README.md:47,67`：KohakuMossTrainer / DiffSynth-Studio 对 **Base 与 SFT 都**支持 LoRA | |
+
+### 10.3 Krea 2 官方仓库（一手，官方）
+
+| 项 | 内容 | 可信度 |
+|---|---|---|
+| URL | `https://raw.githubusercontent.com/krea-ai/krea-2/main/README.md`（5,478 B） | **官方仓库**（推理代码 + 说明，不是训练仓库） |
+| 访问 | 2026-11-27，HTTP 200 | |
+| 关键口径 | `:22/:24/:110`「**TRAIN on Raw and RUN on Turbo**」（Raw 非蒸馏、用于 fine-tune / post-train / LoRA）；`:46` 训练到 1k 分辨率；`:70-72` 推理 `--y1 0.5`（min 分辨率 mu）、`--y2 1.15`（max）、`--mu` 可固定（turbo 推荐 1.15）。**全文没有 LoRA 训练的 `timestep_type` 指导**，训练器外链 `fal.ai/krea-2-trainer`（未访问） | |
+
+---
+
 ## 关键论断 → 来源索引
 
 | 论断 | 来源 |
@@ -201,7 +230,10 @@
 | Krea2 DiT bf16 ≈24 GB | SGLang cookbook |
 | SDXL 社区参数（rank 32、1e-4、120×张数） | HF 官方博客（作者实测） |
 | SDXL VAE 需 fp32 | kohya `docs/sdxl_train_network.md`（`--no_half_vae`） |
-| MOSS 预训练 timestep 是 logit-normal、shift 5.0 仅推理 | kohya `docs/moss_image_train_network.md` |
+| MOSS 预训练 timestep：末期 shift=1 网格 + 截断 logit-normal（μ=−1.09, s=0.95），shift 5.0 仅推理 | `arXiv:2610.23374` Table 2（§10.1，一手）+ kohya `docs/moss_image_train_network.md`（复刻口径） |
+| MOSS 训 LoRA 用 Base（官方原话）、TE 冻结 | `USERGUIDE.md:5,126-132`（§10.2） |
+| Krea2 官方只给「Raw 训 / Turbo 跑」与推理 mu（0.5/1.15），无训练 timestep 口径 | `krea-ai/krea-2 README`（§10.3） |
+| `timestep_type` 判据：官方末期 σ 中位 0.741，`shift`(5.0) 0.833、`linear` 0.50 → `shift` 最接近 | 本仓库自算（按论文式 (4) 采样 4M 次），§10.1 + `moss_image.md` ③ |
 | MOSS 显存与 ConvRot INT8 训练可用性 | kohya README + `docs/moss_image_train_network.md` |
 | Reddit 社区口径缺失 | 本文件 §4（三条路径均访问失败） |
 | Krea2 训练用 Raw、采样器/头身比/霓虹染发/概念泄漏等失败模式 | 本文件 §9.1（二手汇编 + 单条用户帖；非一手复现） |
