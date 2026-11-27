@@ -344,6 +344,12 @@
         <input type="checkbox" id="include_images" name="include_images" value="1" checked>
         <label for="include_images" style="margin:0">把训练图一起打进 zip</label>
       </div>
+      <div class="check">
+        <input type="checkbox" id="allow_missing" name="allow_missing" value="1">
+        <label for="allow_missing" style="margin:0">
+          我确认：有图缺打标词也导出（默认会拦下；云上开训才发现最贵）
+        </label>
+      </div>
       <div class="actions">
         <button type="button" id="preview-btn">预览配置与校验</button>
         <button type="button" id="acceptance-btn">渲染验收清单</button>

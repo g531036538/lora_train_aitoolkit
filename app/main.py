@@ -22,6 +22,7 @@ from loraforge.caption.base import CaptionBackend, CaptionContext
 from loraforge.caption.checks import CheckResult, check_captions
 from loraforge.caption.pipeline import BackendInfo, get_backend, list_backends, run_batch
 from loraforge.caption.reasons import human_reason
+from loraforge.caption.stylers import default_styler
 from loraforge.configs import (
     VRAM_TIERS,
     build_config,
@@ -259,11 +260,34 @@ def _caption_text(path: Path) -> str:
     return txt.read_bytes().decode("utf-8", errors="replace")
 
 
+def _review_caption(text: str, target: TargetModel, ctx: CaptionContext) -> str:
+    """给 ``check_captions`` 用的「渲染后文本」，配 ``raw=`` 你当前写的文字。
+
+    Krea 的 ``identity_removed`` 与 MOSS 的 ``unquoted_text`` 只有把「原文 → styler 渲染后」
+    放在一起比才看得见；但界面不能自己复刻剥离逻辑，所以把文字送一遍库里的 styler。
+    两个前提：文字非空、且已经含触发词——否则 styler 补的触发词会把
+    ``missing_trigger`` 这条红错盖掉。
+    """
+    if not text.strip():
+        return text
+    if PROFILES[target].caption_style != "prose":
+        return text
+    trigger = ctx.trigger.strip()
+    if trigger and trigger not in text:
+        return text
+    try:
+        return default_styler(target).render(text, ctx)
+    except ValueError:
+        # 渲染不出可用句子（比如只剩身份描述）时保持原样，让其它检查照常报。
+        return text
+
+
 def review_items(dataset_dir: str, target: TargetModel, ctx: CaptionContext) -> list[dict[str, Any]]:
     """逐图结果：caption + 句柄 severity + message 原文，界面只按 severity 上色。"""
     result = scan_images(Path(dataset_dir).expanduser())
-    pairs = [(entry.path, _caption_text(entry.path)) for entry in result.images]
-    checks = {check.image: check for check in check_captions(pairs, ctx)}
+    texts = [(entry.path, _caption_text(entry.path)) for entry in result.images]
+    pairs = [(path, _review_caption(raw, target, ctx)) for path, raw in texts]
+    checks = {check.image: check for check in check_captions(pairs, ctx, raw=dict(texts))}
     items: list[dict[str, Any]] = []
     for entry in result.images:
         check: CheckResult = checks[entry.path]
@@ -795,9 +819,20 @@ def export_zip(
     model: str = Form(...),
     trigger: str = Form(""),
     vram_tier: str = Form("24"),
+    steps: str = Form(""),
+    rank: str = Form(""),
+    alpha: str = Form(""),
+    lr: str = Form(""),
+    batch_size: str = Form(""),
     include_images: str = Form("1"),
+    allow_missing: str = Form("0"),
 ) -> JSONResponse:
-    """按表单参数生成 yaml 并打包。硬错一律 400，缺标/孤儿以 200 + 报告返回。"""
+    """按表单参数生成 yaml 并打包。
+
+    参数面板的 steps/rank/alpha/lr/batch 与预览走同一个 ``build_plan_from_form``，
+    否则界面改了参数、导出的还是档位默认值。缺打标词默认 400（云上开训才发现最贵），
+    显式带 ``allow_missing=1`` 才放行，报告里照旧逐张列出。
+    """
     try:
         target = TargetModel(model)
     except ValueError:
@@ -811,15 +846,19 @@ def export_zip(
     if not trigger_text:
         return _fail("参数", ["触发词不能为空：没有触发词，LoRA 学不进身份"])
 
-    try:
-        plan = plan_for_tier(
-            target,
-            vram_tier,
-            dataset_dir=str(dataset),
-            trigger=trigger_text,
-        )
-    except ValueError as exc:
-        return _fail("参数", [str(exc)])
+    plan, errors = build_plan_from_form(
+        target,
+        vram_tier,
+        dataset_dir=str(dataset),
+        trigger=trigger_text,
+        steps=steps,
+        rank=rank,
+        alpha=alpha,
+        lr=lr,
+        batch_size=batch_size,
+    )
+    if errors:
+        return _fail("参数", errors)
 
     config = build_config(target, plan)
     problems = validate_config_detailed(config, target)
@@ -836,6 +875,19 @@ def export_zip(
     out = Path(out_zip.strip()).expanduser()
     if out.suffix.lower() != ".zip":
         return _fail("参数", [f"导出路径要以 .zip 结尾：{out}"])
+
+    missing = [entry.name for entry in scan_images(dataset).without_caption]
+    allow = allow_missing.strip().lower() not in {"", "0", "false", "off"}
+    if missing and not allow:
+        shown = "、".join(missing[:5])
+        more = " 等" if len(missing) > 5 else ""
+        return _fail(
+            "缺打标词",
+            [
+                f"有 {len(missing)} 张图没有打标词：{shown}{more}；"
+                "确认要导出就带 allow_missing=1"
+            ],
+        )
 
     out.parent.mkdir(parents=True, exist_ok=True)
     config_path = out.parent / "train.yaml"
@@ -868,6 +920,7 @@ def export_zip(
             "acceptance": report.extra_files,
             "acceptance_bytes": len(acceptance_text.encode("utf-8")),
             "with_images": with_images,
+            "allow_missing": allow,
             "warnings": warnings,
         }
     )
