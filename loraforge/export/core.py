@@ -121,12 +121,17 @@ def scan_dataset(dataset_dir: Path | str) -> DatasetScan:
     return DatasetScan(root=root, images=images, captions=captions)
 
 
-def _arcname(prefix: str, name: str) -> str:
-    """zip 内部路径。只允许纯文件名，防止把目录外的路径塞进来。"""
+def _safe_name(name: str) -> str:
+    """zip 条目名。只允许纯文件名，防止把目录外的路径塞进来。"""
     safe = Path(name).name
     if not safe or safe in {".", ".."}:
         raise ExportError(f"文件名不可用于打包：{name!r}")
-    return f"{prefix}/{safe}"
+    return safe
+
+
+def _arcname(prefix: str, name: str) -> str:
+    """数据集目录里的条目名：``<图集目录名>/<文件名>``。"""
+    return f"{prefix}/{_safe_name(name)}"
 
 
 def package(
@@ -139,7 +144,11 @@ def package(
 ) -> ExportReport:
     """打包图集 → ``out_zip``。
 
-    zip 结构（§4）：``<图集目录名>/`` 下平铺 ``图 + 同名 .txt + 配置 yaml``。
+    zip 结构（§4）：根目录放 ``train.yaml``（外加 ``验收.md`` 等附带文件），
+    数据集单独一层 ``<图集目录名>/``，里面平铺 ``图 + 同名 .txt``。
+
+    配置和验收清单不放进数据集目录：那个目录的语义就是「图 + 同名 .txt」，
+    扫目录的逻辑不该多一个要排除的东西，用户也不该以为 ``folder_path`` 指那里。
 
     * ``include_images=False`` 只打标注与配置（云端已有图时用）。
     * 缺打标词的图**仍然打进去**，但会出现在 ``missing_caption`` 里；
@@ -169,8 +178,10 @@ def package(
     part = out.with_name(out.name + ".part")
     try:
         with zipfile.ZipFile(part, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.write(cfg_path, _arcname(prefix, cfg_path.name))
-            written: set[str] = set()
+            config_arcname = _safe_name(cfg_path.name)
+            archive.write(cfg_path, config_arcname)
+            # 根目录条目也记进来：附带文件若叫 train.yaml 必须报撞名，不能塞两份同名条目。
+            written: set[str] = {config_arcname}
             for image in scan.images:
                 if include_images:
                     arcname = _arcname(prefix, image.name)
@@ -187,7 +198,7 @@ def package(
                     archive.write(caption, arcname)
                     written.add(arcname)
             for name, payload in (extra_files or {}).items():
-                arcname = _arcname(prefix, name)
+                arcname = _safe_name(name)
                 if arcname in written:
                     raise ExportError(f"附带文件与包里已有条目撞名：{name!r}")
                 # 换行统一成 LF：与 .txt / yaml 的内网口径保持一致，避免 Windows 写出 CRLF。

@@ -106,7 +106,9 @@ def test_export_endpoint_writes_zip_and_reports_missing(scratch: Path) -> None:
     assert Path(payload["config"]).is_file()
     assert out_zip.is_file()
     with zipfile.ZipFile(out_zip) as archive:
-        assert "my_dataset/train.yaml" in archive.namelist()
+        names = archive.namelist()
+        assert "train.yaml" in names
+        assert "my_dataset/train.yaml" not in names
 
 
 def test_export_rejects_missing_trigger(scratch: Path) -> None:
@@ -671,8 +673,9 @@ def test_export_zip_contains_acceptance_markdown(scratch: Path) -> None:
     assert payload["acceptance_bytes"] == len(markdown.encode("utf-8"))
     with zipfile.ZipFile(out_zip) as archive:
         names = archive.namelist()
-        assert "my_dataset/验收.md" in names
-        blob = archive.read("my_dataset/验收.md")
+        assert "验收.md" in names
+        assert "my_dataset/验收.md" not in names
+        blob = archive.read("验收.md")
     assert blob == markdown.encode("utf-8")
     assert b"\r" not in blob
 
@@ -720,7 +723,8 @@ def test_export_train_yaml_is_byte_identical_to_render_train_config(scratch: Pat
     assert expected.startswith(b"#")          # header 三行注释在包里那份里
 
     with zipfile.ZipFile(out_zip) as archive:
-        assert archive.read(f"{dataset.name}/train.yaml") == expected
+        assert "train.yaml" in archive.namelist()
+        assert archive.read("train.yaml") == expected
 
     # 预览与导出一致：同一个函数、同一组参数，字节必须相同。
     preview = CLIENT.post(
@@ -806,7 +810,7 @@ def test_export_honours_custom_plan_fields(scratch: Path) -> None:
     expected = render_train_config("sdxl", plan)
     assert b"steps: 2000" in expected
     with zipfile.ZipFile(out_zip) as archive:
-        blob = archive.read(f"{dataset.name}/train.yaml")
+        blob = archive.read("train.yaml")
     assert blob == expected
 
     preview = CLIENT.post(
