@@ -339,7 +339,9 @@ def analyze_dataset(
    不再承担「某个词出现在太多图上」——那是 `ubiquitous_tag` 的事。
 3. 界面把 `analyze_dataset()` 的结果**单独一栏显示一次**（在逐图列表上方），
    不进逐图列表。逐图列表只显示 `check_captions()` 的结果。
-4. 空打标词不进 `ubiquitous_tag` 的统计分母，也不算进 alpha/resolution 的判定。
+4. 空打标词只从 `ubiquitous_tag` 的统计里排除；`alpha_channel` 与 `small_resolution`
+   判的是**图片本身**，与有没有打标词无关——否则还没打标时就看不到「一半图带透明通道」。
+5. `ubiquitous_tag` 不统计触发词：触发词本来就该 100% 出现，报它等于每批必响。
 
 ---
 
