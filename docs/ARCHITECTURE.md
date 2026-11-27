@@ -243,7 +243,7 @@ def run_batch(
 ```python
 # loraforge/caption/checks.py
 CheckCode = Literal["ok", "empty", "too_short", "missing_trigger", "duplicate",
-                    "identity_removed", "unquoted_text"]
+                    "identity_removed", "unquoted_text", "token_overflow"]
 Severity  = Literal["info", "warn", "error"]
 
 @dataclass(frozen=True)
@@ -262,7 +262,11 @@ def check_captions(
     raw 是「后端原文」，默认 None 时行为与不带 raw 完全一致。
     给了 raw 才能做两条 warn：
       - identity_removed：Krea2 剥掉了身份描述（脸型/发型/肤色等）
-      - unquoted_text：MOSS 的图内文字没加引号
+      - token_overflow：仅 SDXL。打标词超过 CLIP 的 77 token 上限，会被
+        `truncate=True` 静默截断（`toolkit/train_tools.py:402-422`），触发词和尾部标签直接丢失。
+        本机没有 transformers，**只能用近似口径**：逗号分隔标签数 > `SDXL_SOFT_TAG_LIMIT`(75)
+        或英文词数 > `SDXL_SOFT_WORD_LIMIT`(60) 即报 warn。message 必须说明是近似估算，
+        并给出可执行动作（压到 60 以内 / 把固定描述挪进采样 prompt）。不做精确 tokenizer 计数。
     新检查优先级高于 duplicate，但**仍然每张图只出一条**。
     """
 ```
