@@ -297,7 +297,7 @@ python -m app
 
 在「显存档位」表里按自己的显卡挑一档：
 
-| 档位 | 量化 · batch · 分辨率上限 | 说明 |
+| 档位 | 计划量化 · batch · 分辨率上限 | 说明 |
 |---|---|---|
 | 8 GB | qfloat8 · 1 · 512 | 工程建议，未实测：只跑小图；SDXL 自动加 `low_vram`，Krea2/MOSS 大概率跑不动 |
 | 12 GB | qfloat8 · 1 · 768 | 工程建议，未实测：单图 768；SDXL 加 `low_vram` |
@@ -309,7 +309,7 @@ python -m app
 
 **你会看到什么**
 
-选完档位不会立刻有输出；下一次预览或导出时，yaml 里的 `datasets[0].resolution` 和 `train.batch_size` 会随档位变。量化不随档位变：SDXL 从不量化，Krea 2 / MOSS 的 builder 固定开量化（`configs/base.py`）。
+选完档位不会立刻有输出；下一次预览或导出时，yaml 里的 `datasets[0].resolution` 和 `train.batch_size` 会随档位变。**量化不随档位变**：SDXL 的 builder 从不写量化，Krea 2 / MOSS 的 builder 固定写 `quantize: true`（`configs/base.py` 对应函数），所以表里 48 GB 的「不量化」只是档位表建议值，实际 yaml 不会自动关掉。
 
 **看到什么说明出错**
 
@@ -328,7 +328,7 @@ python -m app
 - 「能否导出」：`可以（没有 error）` 或 `不行（存在 error）`；
 - 一行 `步数 / rank / alpha / lr / batch`，一行分辨率；
 - 问题列表：每条 `[severity] code — message`；
-- yaml 全文。顶部三行是注释（版本、目标模型与档位、触发词），下面才是可改的字段。预览里的这份 yaml 与最终进 zip 的 `train.yaml` **逐字节一致**（`app/main.py:704`、`render_train_config`）。
+- yaml 全文。顶部三行是注释（版本、目标模型与档位、触发词），下面才是可改的字段。预览里的这份 yaml 与最终进 zip 的 `train.yaml` **逐字节一致**（`app/main.py:705`、`render_train_config`）。
 
 红项会让「生成 yaml 并导出」按钮变灰，改对之后自动恢复。
 
@@ -338,7 +338,7 @@ python -m app
 - 「存在 error」→ 逐条读 message。这一版 yaml 大多由库生成，手工能填错的只有数字和路径；触发词为空在这一步**不报错**，要到导出时才拒（§11）。
 - warn 不拦导出，但值得看一眼：它会在导出结果里再出现一次。
 
-> **当前版本一个必须知道的限制**：这五个输入框（步数 / rank / alpha / lr / 批量）只影响「预览」和「验收清单」。**导出的 `train.yaml` 不读它们**——导出接口只接收目录、zip 路径、模型、触发词、档位、是否带图六项（`app/main.py:791-800`），yaml 永远是档位默认值。要改成非默认值，导出后直接编辑 `train.yaml`（zip 里一份，zip 同级还有一份，见 §11）。
+> **当前版本一个必须知道的限制**：这五个输入框（步数 / rank / alpha / lr / 批量）只影响「预览」和「验收清单」。**导出的 `train.yaml` 不读它们**——导出接口只接收目录、zip 路径、模型、触发词、档位、是否带图六项（`app/main.py:792-800`），yaml 永远是档位默认值。要改成非默认值，导出后直接编辑 `train.yaml`（zip 里一份，zip 同级还有一份，见 §11）。
 
 ---
 
@@ -392,7 +392,7 @@ my_character/
   验收.md
 ```
 
-同时会在 **zip 同级目录**写一份 `train.yaml`（`app/main.py:838-842`）。要改配置，改 zip 里那份或同级这份都行；如果重新导出，它会按表单值重新生成、覆盖你改过的内容。
+同时会在 **zip 同级目录**写一份 `train.yaml`（`app/main.py:839-843`）。要改配置，改 zip 里那份或同级这份都行；如果重新导出，它会按表单值重新生成、覆盖你改过的内容。
 
 **看到什么说明出错**
 
