@@ -692,3 +692,38 @@ def test_acceptance_html_renders_and_escapes_trigger(scratch: Path) -> None:
     assert "<h1>" in payload["html"] and "<table>" in payload["html"]
     assert "<script>" not in payload["html"]
     assert "&lt;script&gt;" in payload["html"]
+
+
+def test_export_train_yaml_is_byte_identical_to_render_train_config(scratch: Path) -> None:
+    """接线的全部意义：zip 里的 train.yaml 就是 render_train_config 的返回字节。"""
+    from loraforge.configs import plan_for_tier, render_train_config
+
+    dataset = _dataset_with_images(scratch, ("a.png",), with_caption=("a.txt",))
+    out_zip = scratch / "out.zip"
+    form = {
+        "dataset_dir": str(dataset),
+        "out_zip": str(out_zip),
+        "model": "sdxl",
+        "trigger": "mytoken",
+        "vram_tier": "24",
+        "include_images": "1",
+    }
+
+    response = CLIENT.post("/export", data=form)
+    assert response.status_code == 200, response.text
+
+    plan = plan_for_tier("sdxl", "24", dataset_dir=str(dataset), trigger="mytoken")
+    expected = render_train_config("sdxl", plan)
+    assert b"\r" not in expected and expected.endswith(b"\n")
+    assert expected.startswith(b"#")          # header 三行注释在包里那份里
+
+    with zipfile.ZipFile(out_zip) as archive:
+        assert archive.read(f"{dataset.name}/train.yaml") == expected
+
+    # 预览与导出一致：同一个函数、同一组参数，字节必须相同。
+    preview = CLIENT.post(
+        "/config/preview",
+        data={"model": "sdxl", "vram_tier": "24", "dataset_dir": str(dataset), "trigger": "mytoken"},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["yaml"].encode("utf-8") == expected
