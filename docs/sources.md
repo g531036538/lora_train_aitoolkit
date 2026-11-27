@@ -189,7 +189,9 @@
 | URL | `https://arxiv.org/html/2610.23374v1`（HTML 全文；`_src/arxiv-2610.23374-html.html` 433,863 B） | **官方论文** |
 | 访问 | 2026-11-27，`urllib` + UA，HTTP 200 | |
 | 关键口径 | Stage 3 的噪声采样分四段：1–140,000 步 = grid shift 3 + logit-normal(0,1)；140,001–207,000 = shift 1 + (−1.45,1.05)；207,001–274,000 = shift 1 + (−1.45,1.05) + cutoff 0.95；末期 274,001–310,000 = shift 1 + **截断 logit-normal（μ=−1.09, s=0.95）、cutoff 0.95、掺 1% 均匀**。`Z~N(μ,s²)`，`S=1−sigmoid(Z)`，`σ_j=j/T`，`p_j=(1−ρ)·[F(aj/T)−F(a(j−1)/T)]/F(a)+ρ/T`。**loss 不按 σ/SNR 加权**，文本 token 不参与预测 loss | 原文 Table 2 + 式 (4) |
-| 用途 | 决定 `timestep_type` 的判据（σ 分布；换算约定 σ=t/T、t=σ·1000、σ=1 纯噪声），见 `moss_image.md` ③ | |
+| 用途 | 决定 `timestep_type` 的判据（**网格优先于密度**；换算约定 σ=t/T、t=σ·1000、σ=1 纯噪声），见 `moss_image.md` ③ | |
+
+**补充出处（ai-toolkit 源码，一手）**：`_src/ai-toolkit/extensions_built_in/diffusion_models/moss_image/src/pipeline.py:24-49,137,141`——`moss_sigmas(num_steps, shift=5.0, training_shift: float = 1.0, total=1000)` 在 `:40` 用 `grid(total, training_shift)` 构造训练网格、`:44-49` 把采样网格吸附到其上；`training_shift` **全仓库只有定义、无任何调用点传非默认值**（`grep -rn training_shift _src/ai-toolkit` 仅 `:27`、`:40`）→ 厂商训练网格是 **shift=1**；`:137` 调 `moss_sigmas`，`:141` `timestep = sigma * NUM_TRAIN_TIMESTEPS` 给出 σ→t 换算。可信度：**一手源码**（`ai-toolkit@73c84b0`，2026-11-27 读取）。
 
 ### 10.2 MOSS 官方仓库 README / USERGUIDE（一手，官方）
 
