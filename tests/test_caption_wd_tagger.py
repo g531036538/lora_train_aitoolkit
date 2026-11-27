@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -205,3 +206,36 @@ def test_get_backend_reports_missing_weights(model_dir: Path, monkeypatch):
     monkeypatch.setattr(wd_tagger, "ort", object())
     with pytest.raises(RuntimeError, match="model_weights_missing"):
         get_backend("wd_tagger")
+
+
+def test_get_backend_reuses_instance_and_invalidates_on_mtime(
+    model_dir: Path, monkeypatch
+):
+    """同一模型两次 get_backend 必须同一实例；权重 mtime 变了要重建。"""
+    from loraforge.caption.pipeline import get_backend
+
+    model_path = model_dir / wd_tagger.MODEL_FILENAME
+    model_path.write_bytes(b"not really onnx")
+    calls: list[str] = []
+
+    class FakeOrt:
+        @staticmethod
+        def InferenceSession(path, providers):
+            calls.append(path)
+            return FakeSession(DEFAULT_SCORES)
+
+    monkeypatch.setattr(wd_tagger, "ort", FakeOrt)
+    monkeypatch.setattr(wd_tagger, "_SESSION_CACHE", {})
+    monkeypatch.setattr(wd_tagger, "_BACKEND_CACHE", {})
+
+    first = get_backend("wd_tagger")
+    second = get_backend("wd_tagger")
+    assert first is second
+    assert len(calls) == 1
+
+    stat = model_path.stat()
+    os.utime(model_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+    third = get_backend("wd_tagger")
+    assert third is not first
+    assert len(calls) == 2

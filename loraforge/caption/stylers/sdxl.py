@@ -128,6 +128,12 @@ def _strip_filler(tag: str) -> str:
 
 
 def _clean_tag(tag: str) -> str:
+    """清理单个标签。
+
+    Danbooru 的下划线写法（``long_hair``）在这里转成空格（``long hair``）：
+    对 CLIP 的 BPE 分词更省 token，也更接近 SDXL 社区常见写法；若用户需要
+    严格保持 Danbooru 的原始形状，可以关掉这一步。
+    """
     tag = tag.strip()
     if not tag:
         return ""

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import os
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,39 @@ CAPS = BackendCaps(
 )
 
 SessionFactory = Callable[[str], Any]
+
+_CACHE_LOCK = threading.RLock()
+_SESSION_CACHE: dict[tuple[str, int, int], Any] = {}
+_BACKEND_CACHE: dict[tuple[str, int, int], "WdTaggerBackend"] = {}
+
+
+def _cache_key(model_dir: Path) -> tuple[str, int, int]:
+    """缓存键：模型目录 + 两个权重文件的 mtime（纳秒）。
+
+    mtime 必须进键：用户换模型/换标签表后要重建 session，不能复用旧图。
+    """
+    model_path = model_dir / MODEL_FILENAME
+    tags_path = model_dir / TAGS_FILENAME
+    return (
+        str(model_dir.resolve()),
+        model_path.stat().st_mtime_ns,
+        tags_path.stat().st_mtime_ns,
+    )
+
+
+def _get_session(cache_key: tuple[str, int, int], model_path: Path) -> Any:
+    """按缓存键复用 onnxruntime session；同一进程内只 load 一次。"""
+    if ort is None:  # pragma: no cover - 由 availability 提前挡住
+        raise RuntimeError("缺少 onnxruntime；无法运行 WD tagger")
+    with _CACHE_LOCK:
+        session = _SESSION_CACHE.get(cache_key)
+        if session is None:
+            session = ort.InferenceSession(
+                str(model_path),
+                providers=["CPUExecutionProvider"],
+            )
+            _SESSION_CACHE[cache_key] = session
+        return session
 
 
 def availability() -> tuple[bool, str]:
@@ -154,10 +188,7 @@ class WdTaggerBackend:
             model_path = self.model_dir / MODEL_FILENAME
             if not model_path.is_file():
                 raise RuntimeError(f"缺少模型文件：{model_path}")
-            self.session = ort.InferenceSession(
-                str(model_path),
-                providers=["CPUExecutionProvider"],
-            )
+            self.session = _get_session(_cache_key(self.model_dir), model_path)
 
     def caps(self) -> BackendCaps:
         return CAPS
@@ -215,6 +246,21 @@ class WdTaggerBackend:
         return ", ".join(picked)
 
 
+def get_cached_backend() -> WdTaggerBackend:
+    """按模型目录 + 权重 mtime 复用后端实例；换模型会得到新实例。"""
+    raw = os.getenv(ENV_MODEL_DIR, "").strip()
+    if not raw:
+        raise RuntimeError(f"未配置 {ENV_MODEL_DIR}")
+    model_dir = Path(raw)
+    cache_key = _cache_key(model_dir)
+    with _CACHE_LOCK:
+        backend = _BACKEND_CACHE.get(cache_key)
+        if backend is None:
+            backend = WdTaggerBackend()
+            _BACKEND_CACHE[cache_key] = backend
+        return backend
+
+
 __all__ = [
     "CAPS",
     "DEFAULT_CHARACTER_THRESHOLD",
@@ -226,4 +272,5 @@ __all__ = [
     "TAGS_FILENAME",
     "WdTaggerBackend",
     "availability",
+    "get_cached_backend",
 ]
