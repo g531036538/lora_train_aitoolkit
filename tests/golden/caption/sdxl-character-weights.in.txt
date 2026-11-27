@@ -1,0 +1,1 @@
+sks_person, (smile:1.2), (long_hair:1.1), [blush:0.8], red dress, (looking at viewer:1.05), masterpiece
