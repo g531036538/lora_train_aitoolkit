@@ -61,12 +61,18 @@ def ok_response(text: str) -> Callable[[httpx.Request], httpx.Response]:
 
 
 def test_availability_reports_missing_url() -> None:
-    assert openai_http.availability() == (False, "未配置 LORAFORGE_VLM_URL")
+    assert openai_http.availability() == (
+        False,
+        "requires_credentials:未配置 LORAFORGE_VLM_URL",
+    )
 
 
 def test_availability_reports_missing_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(openai_http.ENV_URL, "http://vlm.test/v1")
-    assert openai_http.availability() == (False, "未配置 LORAFORGE_VLM_MODEL")
+    assert openai_http.availability() == (
+        False,
+        "requires_credentials:未配置 LORAFORGE_VLM_MODEL",
+    )
 
 
 def test_availability_is_true_when_url_and_model_are_set(
@@ -74,7 +80,7 @@ def test_availability_is_true_when_url_and_model_are_set(
 ) -> None:
     monkeypatch.setenv(openai_http.ENV_URL, "http://vlm.test/v1")
     monkeypatch.setenv(openai_http.ENV_MODEL, "test-vision")
-    assert openai_http.availability() == (True, "")
+    assert openai_http.availability() == (True, "ok")
 
 
 def test_constructor_requires_url() -> None:

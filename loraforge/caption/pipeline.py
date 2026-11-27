@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from loraforge.caption.base import BackendCaps, CaptionBackend, CaptionContext, CaptionStyler
+from loraforge.caption.reasons import human_reason
 from loraforge.caption.stylers import default_styler
 
 ProgressHook = Callable[[int, int, Path, str | None, str | None], None]
@@ -71,12 +72,12 @@ def _http_backend_info() -> BackendInfo:
                 languages=("en", "zh"),
             ),
             available=False,
-            reason=f"后端模块不可用：{exc}",
+            reason=f"missing_dependency:openai-http: 后端模块不可用：{exc}",
         )
 
 
 def list_backends() -> list[BackendInfo]:
-    """列出全部已知后端。不可用也列，并在 reason 里写清楚缺什么。"""
+    """列出全部已知后端。不可用也列，reason 是「稳定前缀 + 可选细节」。"""
     from loraforge.testing import FakeBackend
 
     fake_caps = FakeBackend().caps()
@@ -86,7 +87,7 @@ def list_backends() -> list[BackendInfo]:
             label="Fake（测试用，不读图）",
             caps=fake_caps,
             available=True,
-            reason="",
+            reason="ok",
         ),
         _http_backend_info(),
     ]
@@ -111,7 +112,7 @@ def get_backend(key: str) -> CaptionBackend:
 
         available, reason = availability()
         if not available:
-            raise RuntimeError(reason)
+            raise RuntimeError(human_reason(reason))
         return OpenAIVisionBackend()
 
     raise KeyError(f"未知后端：{key!r}")
