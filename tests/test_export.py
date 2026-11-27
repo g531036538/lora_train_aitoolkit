@@ -45,8 +45,10 @@ def test_package_layout_and_report(scratch: Path) -> None:
     assert report.ok is False  # 缺了标就不算干净
 
     names = _names(report)
-    assert {"my_dataset/train.yaml", "my_dataset/frame_01.png", "my_dataset/frame_01.txt",
+    assert {"train.yaml", "my_dataset/frame_01.png", "my_dataset/frame_01.txt",
             "my_dataset/frame_02.png"} <= names
+    # 配置在根，不混进数据集目录
+    assert "my_dataset/train.yaml" not in names
     # 缺标的图不带 txt 进去，避免云端把图配到别人的标注上
     assert "my_dataset/frame_02.txt" not in names
 
@@ -99,7 +101,7 @@ def test_include_images_false_keeps_only_captions_and_config(scratch: Path) -> N
 
     names = _names(report)
     assert not [name for name in names if name.endswith(".png")]
-    assert {"my_dataset/frame_01.txt", "my_dataset/train.yaml"} <= names
+    assert {"my_dataset/frame_01.txt", "train.yaml"} <= names
 
 
 def test_empty_dataset_raises(scratch: Path) -> None:
@@ -135,21 +137,64 @@ def test_extra_files_are_normalized_to_lf(scratch: Path) -> None:
 
     assert report.extra_files == ["验收.md"]
     with zipfile.ZipFile(report.zip_path) as archive:
-        blob = archive.read("my_dataset/验收.md")
+        blob = archive.read("验收.md")
     assert blob == "# 标题\n第一行\n第二行\n".encode("utf-8")
     assert b"\r" not in blob
 
 
 def test_extra_file_collision_raises(scratch: Path) -> None:
-    """附带文件与包里已有条目撞名时不许静默覆盖。"""
+    """附带文件与同一层已有条目撞名时不许静默覆盖。
+
+    配置在根目录，所以撞名只可能发生在根：叫 ``train.yaml`` 的附带文件必须报错。
+    数据集目录里的同名条目不算撞名 —— 那是不同层，各自合法。
+    """
     dataset = _make_dataset(scratch)
     with pytest.raises(ExportError, match="撞名"):
         package(
             dataset,
             _make_config(scratch),
             scratch / "out.zip",
-            extra_files={"frame_01.txt": b"x"},
+            extra_files={"train.yaml": b"x"},
         )
+
+
+def test_config_and_extras_live_at_zip_root(scratch: Path) -> None:
+    """Issue #72：根目录 = train.yaml + 验收.md；数据集目录里只有图与同名 .txt。"""
+    dataset = _make_dataset(scratch)
+    report = package(
+        dataset,
+        _make_config(scratch),
+        scratch / "out.zip",
+        extra_files={"验收.md": "清单\n".encode("utf-8")},
+    )
+
+    names = set(_names(report))
+    assert {"train.yaml", "验收.md"} <= names
+    assert "my_dataset/train.yaml" not in names
+    assert "my_dataset/验收.md" not in names
+    assert {name for name in names if name.startswith("my_dataset/")} == {
+        "my_dataset/frame_01.png",
+        "my_dataset/frame_01.txt",
+        "my_dataset/frame_02.png",
+    }
+
+
+def test_extra_file_named_like_dataset_entry_is_allowed(scratch: Path) -> None:
+    """根目录的 frame_01.txt 与数据集里的 frame_01.txt 是两层，不算撞名。"""
+    dataset = _make_dataset(scratch)
+    report = package(
+        dataset,
+        _make_config(scratch),
+        scratch / "out.zip",
+        extra_files={"frame_01.txt": b"root level\n"},
+    )
+
+    names = set(_names(report))
+    assert "frame_01.txt" in names
+    assert "my_dataset/frame_01.txt" in names
+    with zipfile.ZipFile(report.zip_path) as archive:
+        assert archive.read("frame_01.txt") == b"root level\n"
+        assert archive.read("my_dataset/frame_01.txt") != b"root level\n"
 
 
 def test_no_extra_files_by_default(scratch: Path) -> None:
