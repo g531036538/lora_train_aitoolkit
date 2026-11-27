@@ -86,30 +86,35 @@ def analyze_dataset(
     threshold: float = 0.8,
     sample: int = 20,
 ) -> list[DatasetIssue]:
-    """整批体检；每种 code 最多一条。空打标词的图不参与任何统计。"""
+    """整批体检；每种 code 最多一条。
+
+    空打标词只从 ``ubiquitous_tag`` 的统计里排除；透明通道和分辨率判的是
+    图片本身，跟有没有打标词无关——用户还没打标时更该先看到这些提示。
+    """
     entries = [(Path(image), str(caption or "")) for image, caption in pairs]
-    active = [(image, caption) for image, caption in entries if _normalize(caption)]
-    if not active:
+    if not entries:
         return []
 
-    total = len(active)
+    total = len(entries)
+    active = [(image, caption) for image, caption in entries if _normalize(caption)]
+    active_total = len(active)
     issues: list[DatasetIssue] = []
 
-    transparent, small = _analyze_images(active)
+    transparent, small = _analyze_images(entries)
     if transparent:
         issues.append(
             DatasetIssue(
                 code="alpha_channel",
                 severity="warn",
                 message=(
-                    f"{len(transparent)} 张图带真正的透明通道（共 {total} 张有效图）；"
+                    f"{len(transparent)} 张图带真正的透明通道（共 {total} 张图）；"
                     "训练读取时透明区可能被当成黑底或白底，建议先合成到纯色底再导出"
                 ),
                 files=tuple(transparent[:sample]),
             )
         )
 
-    if _style_of(ctx) == "tags" and total >= MIN_BATCH_FOR_UBIQUITY:
+    if _style_of(ctx) == "tags" and active_total >= MIN_BATCH_FOR_UBIQUITY:
         trigger_tag = _normalize(ctx.trigger.replace("_", " ").lower())
         tag_counts: Counter[str] = Counter()
         for _image, caption in active:
@@ -117,7 +122,7 @@ def analyze_dataset(
         hot = [
             (tag, count)
             for tag, count in tag_counts.items()
-            if count > threshold * total and tag != trigger_tag
+            if count > threshold * active_total and tag != trigger_tag
         ]
         if hot:
             hot.sort(key=lambda item: (-item[1], item[0]))
@@ -135,7 +140,7 @@ def analyze_dataset(
                     severity="warn",
                     message=(
                         f"{shown}{more} 出现在超过 {int(threshold * 100)}% 的打标词里"
-                        f"（共 {total} 张有效图）；"
+                        f"（共 {active_total} 张有效图）；"
                         "如果它们不是角色本体，建议写进采样 prompt 而不是打标词"
                     ),
                     files=tuple(affected[:sample]),
@@ -148,7 +153,7 @@ def analyze_dataset(
                 code="small_resolution",
                 severity="warn",
                 message=(
-                    f"{len(small)} 张图短边小于 {SMALL_SIDE} px（共 {total} 张有效图）；"
+                    f"{len(small)} 张图短边小于 {SMALL_SIDE} px（共 {total} 张图）；"
                     "低于训练桶下限会被放大，细节不可追，建议换更高分辨率的原图"
                 ),
                 files=tuple(small[:sample]),

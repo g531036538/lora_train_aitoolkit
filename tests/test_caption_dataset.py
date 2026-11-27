@@ -107,7 +107,7 @@ def test_truly_transparent_png_is_flagged_once(tmp_path: Path) -> None:
     issue = issues[0]
     assert issue.files == ("0.png",)
     assert "1 张" in issue.message
-    assert "3 张有效图" in issue.message
+    assert "3 张图" in issue.message
 
 
 def test_opaque_alpha_channel_is_not_flagged(tmp_path: Path) -> None:
@@ -140,16 +140,36 @@ def test_max_one_issue_per_code(tmp_path: Path) -> None:
     assert all(len(issue.files) <= 2 for issue in issues)
 
 
-def test_empty_captions_are_ignored_everywhere(tmp_path: Path) -> None:
-    # 4 张有词的正常图 + 4 张空词的坏图（300px、全透明）。
-    # 空词既不进同质分母（4 < 5 不报同质），也不做 alpha/resolution 判定。
+def test_alpha_channel_survives_empty_captions(tmp_path: Path) -> None:
+    # 打标词全空时，透明通道仍然要报：判的是图片本身，不是打标词。
     pairs = [
-        (make_image(tmp_path / f"{index}.png"), HOMOGENEOUS)
-        for index in range(4)
+        (make_image(tmp_path / f"{index}.png", alpha=0), "")
+        for index in range(3)
+    ] + [
+        (make_image(tmp_path / f"{index}.png"), "")
+        for index in range(3, 6)
     ]
-    pairs += [
-        (make_image(tmp_path / f"{index}.png", size=(300, 300), alpha=0), "")
-        for index in range(4, 8)
+    issues = analyze_dataset(pairs, ctx())
+    assert codes(issues) == ["alpha_channel"]
+    assert issues[0].files == ("0.png", "1.png", "2.png")
+    assert "3 张图" in issues[0].message
+
+
+def test_small_resolution_survives_empty_captions(tmp_path: Path) -> None:
+    pairs = [
+        (make_image(tmp_path / f"{index}.png", size=(300, 640)), "")
+        for index in range(6)
+    ]
+    issues = analyze_dataset(pairs, ctx())
+    assert codes(issues) == ["small_resolution"]
+    assert "6 张图" in issues[0].message
+
+
+def test_empty_captions_do_not_report_ubiquitous_tag(tmp_path: Path) -> None:
+    # 空词不进同质统计分母，所以即便整批全空也不报 ubiquitous_tag。
+    pairs = [
+        (make_image(tmp_path / f"{index}.png"), "")
+        for index in range(6)
     ]
     assert analyze_dataset(pairs, ctx()) == []
 
