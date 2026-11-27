@@ -145,25 +145,28 @@ python -c "import hashlib,sys;[print(p, len(open(p,'rb').read()), sum(1 for _ in
 
 ## 8. 本机环境事实（先看这条，能省很多弯路）
 
-**装不了任何包。** `python -m pip` 不存在；`python -m ensurepip --user` 因为沙箱拒绝写系统临时目录而失败（`PermissionError: [WinError 5]`）。所以：
+**可以从 PyPI 装包了（2026-11-27 起）。** 会话权限从 `workspace-write` 提到 `danger-full-access` 后：
 
-- 不要写 `pip install ...`，不要提 `python -m venv`，不要指望 `.[ui]` 能装
-- 不要建议换框架来「解决依赖问题」——依赖就在这里，改不了
+- `python -m ensurepip --upgrade` 成功，**`pip 26.2.1` 可用**
+- 已装 **`onnxruntime 1.32.0`**（Python 3.14 有 abi3 轮子）
+- 装包仍要在会话内做，但**不许**把「装了什么」当成代码依赖的借口：核心功能必须在不装任何可选包时 import 正常、测试全绿
 
 Python 是 **3.14.7**，已预装 138 个包。与本项目相关的：
 
-| 有 | 没有 |
+| 有 | 没有（可装） |
 | --- | --- |
-| fastapi 0.136、uvicorn 0.48、jinja2 3.1、python-multipart 0.0.29 | **gradio** |
-| pillow、numpy、opencv-python、scipy | **onnxruntime、transformers、accelerate** |
-| pyyaml、httpx、requests、pydantic、starlette | openai SDK |
+| fastapi 0.136、uvicorn 0.48、jinja2 3.1、python-multipart 0.0.29 | **gradio**（不装，界面已定 FastAPI） |
+| pillow、numpy、opencv-python、scipy、pyyaml | **transformers、accelerate**（VLM 用，量大，需要再议） |
+| httpx、requests、pydantic、starlette | openai SDK |
 | torch 2.12、torchvision 0.27、safetensors、einops、tqdm | pandas |
-| pytest、huggingface-hub | —— |
+| pytest、huggingface-hub、**onnxruntime 1.32** | —— |
 
-两条推论，直接决定方案：
+推论：
 
 1. **界面用 FastAPI + Jinja2 + 原生 JS**，不是 Gradio。
-2. **本地跑不动 onnx tagger 和 VLM**（缺 onnxruntime / transformers 且装不上）。真正能落地的真实打标后端是**远程 HTTP 后端**（httpx 已装）；本地只跑 `FakeBackend`。
+2. **本地 tagger 现在能跑**：onnxruntime 已装，权重由用户放在 `LORAFORGE_WD_MODEL_DIR`（`model.onnx` + `selected_tags.csv`）。开发机权重在 `models/wd-swinv2-tagger-v3/`、`models/wd-eva02-large-tagger-v3/`（**不入库**，见 `.gitignore`）。
+3. **远程 HTTP 后端仍然保留**：没有权重、没有网、或用户想用更强 VLM 时走它。
+4. 可选依赖一律**延迟 import**：缺了就把 `availability()` 的 reason 写成 `missing_dependency:<name>` / `model_weights_missing`，**不许 import 就炸**。
 
 ## 8.1 跑测试
 
