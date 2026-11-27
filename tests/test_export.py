@@ -121,3 +121,38 @@ def test_scan_dataset_pairs_case_insensitively(scratch: Path) -> None:
     assert scan.missing_caption == ["frame_02.png"]
     assert scan.orphan_caption == []
     assert scan.captions["frame_01"].name == "frame_01.txt"
+
+
+def test_extra_files_are_normalized_to_lf(scratch: Path) -> None:
+    """验收.md 这类附带文件进包前统一成 LF，Windows 的 CRLF 不能混进去。"""
+    dataset = _make_dataset(scratch)
+    report = package(
+        dataset,
+        _make_config(scratch),
+        scratch / "out.zip",
+        extra_files={"验收.md": "# 标题\r\n第一行\r第二行\n".encode("utf-8")},
+    )
+
+    assert report.extra_files == ["验收.md"]
+    with zipfile.ZipFile(report.zip_path) as archive:
+        blob = archive.read("my_dataset/验收.md")
+    assert blob == "# 标题\n第一行\n第二行\n".encode("utf-8")
+    assert b"\r" not in blob
+
+
+def test_extra_file_collision_raises(scratch: Path) -> None:
+    """附带文件与包里已有条目撞名时不许静默覆盖。"""
+    dataset = _make_dataset(scratch)
+    with pytest.raises(ExportError, match="撞名"):
+        package(
+            dataset,
+            _make_config(scratch),
+            scratch / "out.zip",
+            extra_files={"frame_01.txt": b"x"},
+        )
+
+
+def test_no_extra_files_by_default(scratch: Path) -> None:
+    dataset = _make_dataset(scratch)
+    report = package(dataset, _make_config(scratch), scratch / "out.zip")
+    assert report.extra_files == []

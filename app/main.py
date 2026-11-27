@@ -28,10 +28,13 @@ from loraforge.configs import (
     build_config,
     default_plan,
     plan_for_tier,
+    render_acceptance_markdown,
     validate_config_detailed,
 )
 from loraforge.export import ExportError, package, scan_images
 from loraforge.models import PROFILES, DatasetKind, TargetModel
+
+from .markdown import render_markdown
 
 APP_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -337,6 +340,16 @@ def build_plan_from_form(
     except ValueError as exc:
         return None, [str(exc)]
     return plan, []
+
+
+def acceptance_markdown(target: TargetModel, plan: Any) -> str:
+    """验收清单的 LF 版本。
+
+    渲染在 ``loraforge.configs.acceptance``（阿配的写集），界面只保证换行口径：
+    纯文本 → 统一 LF + 结尾换行，这样界面预览与 zip 里的 ``验收.md`` 是同一份字节。
+    """
+    text = render_acceptance_markdown(target, plan)
+    return text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +706,53 @@ def preview_config(
     )
 
 
+@app.post("/acceptance")
+def acceptance(
+    model: str = Form(...),
+    vram_tier: str = Form("24"),
+    dataset_dir: str = Form(""),
+    trigger: str = Form(""),
+    output_dir: str = Form(""),
+    steps: str = Form(""),
+    rank: str = Form(""),
+    alpha: str = Form(""),
+    lr: str = Form(""),
+    batch_size: str = Form(""),
+) -> JSONResponse:
+    """按当前参数渲染验收清单（Markdown）。导出时会以 ``验收.md`` 进 zip。"""
+    try:
+        target = TargetModel(model)
+    except ValueError:
+        return _fail("参数", [f"未知目标模型：{model!r}"])
+    plan, errors = build_plan_from_form(
+        target,
+        vram_tier,
+        dataset_dir=dataset_dir,
+        trigger=trigger,
+        output_dir=output_dir,
+        steps=steps,
+        rank=rank,
+        alpha=alpha,
+        lr=lr,
+        batch_size=batch_size,
+    )
+    if errors:
+        return _fail("参数", errors)
+    markdown = acceptance_markdown(target, plan)
+    blob = markdown.encode("utf-8")
+    return JSONResponse(
+        {
+            "ok": True,
+            "model": target.value,
+            "trigger": plan.trigger,
+            "bytes": len(blob),
+            "lines": markdown.count("\n"),
+            "markdown": markdown,
+            "html": render_markdown(markdown),
+        }
+    )
+
+
 @app.get("/state")
 def get_state() -> JSONResponse:
     return JSONResponse(load_state())
@@ -782,9 +842,16 @@ def export_zip(
         yaml.safe_dump(config, allow_unicode=True, sort_keys=False).encode("utf-8")
     )
 
+    acceptance_text = acceptance_markdown(target, plan)
     with_images = include_images.strip().lower() not in {"", "0", "false", "off"}
     try:
-        report = package(dataset, config_path, out, include_images=with_images)
+        report = package(
+            dataset,
+            config_path,
+            out,
+            include_images=with_images,
+            extra_files={"验收.md": acceptance_text.encode("utf-8")},
+        )
     except ExportError as exc:
         return _fail("导出", [str(exc)])
 
@@ -798,6 +865,8 @@ def export_zip(
             "missing_caption": report.missing_caption,
             "orphan_caption": report.orphan_caption,
             "ambiguous": report.ambiguous,
+            "acceptance": report.extra_files,
+            "acceptance_bytes": len(acceptance_text.encode("utf-8")),
             "with_images": with_images,
             "warnings": warnings,
         }
