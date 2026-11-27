@@ -594,3 +594,101 @@ def test_state_rejects_unknown_schema(scratch: Path, monkeypatch: pytest.MonkeyP
     assert "schema" in loaded["errors"][0]
     assert loaded["values"] == {}
     assert 'value="oldvalue"' not in CLIENT.get("/").text
+
+
+def test_acceptance_endpoint_renders_markdown(scratch: Path) -> None:
+    """验收清单由 loraforge.configs.acceptance 渲染，界面只透传 + 保证 LF。"""
+    response = CLIENT.post(
+        "/acceptance",
+        data={
+            "model": "sdxl",
+            "vram_tier": "24",
+            "trigger": "mytoken",
+            "dataset_dir": str(scratch),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    markdown = payload["markdown"]
+    assert markdown.startswith("# SDXL LoRA 验收清单")
+    assert "mytoken" in markdown
+    assert "\r" not in markdown
+    assert markdown.endswith("\n")
+    assert payload["bytes"] == len(markdown.encode("utf-8"))
+    assert payload["lines"] == markdown.count("\n")
+
+
+def test_acceptance_endpoint_rejects_unknown_model() -> None:
+    response = CLIENT.post("/acceptance", data={"model": "nope"})
+    assert 400 <= response.status_code < 500
+    assert response.json()["ok"] is False
+    assert response.json()["errors"]
+
+
+def test_export_zip_contains_acceptance_markdown(scratch: Path) -> None:
+    """导出 zip 里带 验收.md，内容与 /acceptance 预览逐字节一致、且是 LF。"""
+    dataset = scratch / "my_dataset"
+    dataset.mkdir()
+    for name in ("frame_01.png", "frame_02.png"):
+        (dataset / name).write_bytes(b"\x89PNG\r\n\x1a\n")
+        (dataset / name).with_suffix(".txt").write_text(
+            "mytoken, a photo of a person, standing\n", encoding="utf-8"
+        )
+    out_zip = scratch / "out.zip"
+
+    preview = CLIENT.post(
+        "/acceptance",
+        data={
+            "model": "moss_image",
+            "vram_tier": "16",
+            "trigger": "mytoken",
+            "dataset_dir": str(dataset),
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    markdown = preview.json()["markdown"]
+
+    response = CLIENT.post(
+        "/export",
+        data={
+            "dataset_dir": str(dataset),
+            "out_zip": str(out_zip),
+            "model": "moss_image",
+            "trigger": "mytoken",
+            "vram_tier": "16",
+            "include_images": "0",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["acceptance"] == ["验收.md"]
+    assert payload["acceptance_bytes"] == len(markdown.encode("utf-8"))
+    with zipfile.ZipFile(out_zip) as archive:
+        names = archive.namelist()
+        assert "my_dataset/验收.md" in names
+        blob = archive.read("my_dataset/验收.md")
+    assert blob == markdown.encode("utf-8")
+    assert b"\r" not in blob
+
+
+def test_acceptance_html_renders_and_escapes_trigger(scratch: Path) -> None:
+    """验收清单同时给 Markdown 与渲染后的 HTML；触发词里的标签不能变成真标签。"""
+    response = CLIENT.post(
+        "/acceptance",
+        data={
+            "model": "sdxl",
+            "vram_tier": "24",
+            "trigger": "<script>alert(1)</script>",
+            "dataset_dir": str(scratch),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert "<h1>" in payload["html"] and "<table>" in payload["html"]
+    assert "<script>" not in payload["html"]
+    assert "&lt;script&gt;" in payload["html"]

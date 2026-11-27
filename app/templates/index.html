@@ -61,6 +61,15 @@
   .bad-list li span { display: block; color: #ffb3b3; margin-top: 2px; }
   .warn-text { color: var(--warn); }
   .export .row { display: flex; gap: 8px; }
+  .acceptance { margin-top: 10px; padding: 4px 14px; border: 1px solid var(--line);
+                border-radius: 8px; background: #14161b; overflow-x: auto; }
+  .acceptance h1 { font-size: 18px; margin: 12px 0 8px; }
+  .acceptance h2 { font-size: 15.5px; margin: 14px 0 8px; color: var(--accent); }
+  .acceptance h3 { font-size: 14px; margin: 12px 0 6px; }
+  .acceptance p, .acceptance li { font-size: 13px; line-height: 1.65; color: #c9d1d9; }
+  .acceptance blockquote { margin: 10px 0; padding: 6px 10px; border-left: 3px solid var(--accent);
+                           color: #9aa4b2; font-size: 12.5px; }
+  .acceptance td, .acceptance th { font-size: 12.5px; vertical-align: top; }
   #review-note { margin-top: 12px; font-size: 12.5px; color: var(--ok); }
   .review-list { display: grid; gap: 12px; margin-top: 16px; }
   .review-item { display: grid; grid-template-columns: 132px 1fr; gap: 14px;
@@ -337,12 +346,14 @@
       </div>
       <div class="actions">
         <button type="button" id="preview-btn">预览配置与校验</button>
+        <button type="button" id="acceptance-btn">渲染验收清单</button>
         <button type="submit" id="submit-btn">生成 yaml 并导出</button>
         <button type="button" id="state-save">保存当前配置</button>
         <button type="button" id="state-load">载入上次配置</button>
       </div>
       <div class="hint" id="state-note" style="grid-column:1/-1;margin:0"></div>
       <div id="result" role="status" aria-live="polite"></div>
+      <div id="acceptance-out" style="grid-column:1/-1"></div>
     </form>
   </section>
 </main>
@@ -751,6 +762,8 @@
     var out = document.getElementById("result");
     var btn = document.getElementById("submit-btn");
     var previewBtn = document.getElementById("preview-btn");
+    var acceptanceBtn = document.getElementById("acceptance-btn");
+    var acceptanceOut = document.getElementById("acceptance-out");
     var stateNote = document.getElementById("state-note");
 
     function fields() {
@@ -797,6 +810,40 @@
         })
         .catch(function (err) { out.textContent = ""; out.appendChild(line("请求失败", String(err), "#ff6b6b")); })
         .then(function () { previewBtn.disabled = false; });
+    });
+
+    acceptanceBtn.addEventListener("click", function () {
+      var body = fields();
+      acceptanceBtn.disabled = true;
+      acceptanceOut.textContent = "渲染中…";
+      post("/acceptance", body)
+        .then(function (res) {
+          var data = res.data;
+          acceptanceOut.textContent = "";
+          if (!data.ok) {
+            acceptanceOut.appendChild(failures("验收清单渲染失败（" + data.stage + "）", data.errors || ["未知错误"]));
+            return;
+          }
+          acceptanceOut.appendChild(line(
+            "验收清单",
+            data.bytes + " 字节 / " + data.lines + " 行（LF）；导出时作为 验收.md 进 zip"
+          ));
+          var doc = document.createElement("div");
+          doc.className = "acceptance";
+          // 服务端渲染的 HTML 已整体转义过，触发词/路径只会是文本。
+          doc.innerHTML = data.html;
+          acceptanceOut.appendChild(doc);
+          var raw = document.createElement("details");
+          var summary = document.createElement("summary");
+          summary.textContent = "查看 Markdown 原文";
+          var pre = document.createElement("pre");
+          pre.textContent = data.markdown;
+          raw.appendChild(summary);
+          raw.appendChild(pre);
+          acceptanceOut.appendChild(raw);
+        })
+        .catch(function (err) { acceptanceOut.textContent = ""; acceptanceOut.appendChild(line("请求失败", String(err), "#ff6b6b")); })
+        .then(function () { acceptanceBtn.disabled = false; });
     });
 
     document.getElementById("state-save").addEventListener("click", function () {

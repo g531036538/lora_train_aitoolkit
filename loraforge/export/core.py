@@ -11,6 +11,7 @@ import os
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 
 #: 认作训练图的扩展名。比较时统一小写。
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp"})
@@ -34,6 +35,8 @@ class ExportReport:
     orphan_caption: list[str]
     #: 同名冲突（``a.png`` 与 ``a.jpg`` 抢同一份 ``a.txt``）。契约外新增，带默认值。
     ambiguous: list[str] = field(default_factory=list)
+    #: 附带的非图文件（目前是验收清单 ``验收.md``），按写入顺序记名字。
+    extra_files: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -132,6 +135,7 @@ def package(
     out_zip: Path | str,
     *,
     include_images: bool = True,
+    extra_files: Mapping[str, bytes] | None = None,
 ) -> ExportReport:
     """打包图集 → ``out_zip``。
 
@@ -141,6 +145,9 @@ def package(
     * 缺打标词的图**仍然打进去**，但会出现在 ``missing_caption`` 里；
       是否拦截由调用方决定（界面在缺标时禁止导出）。
     * 孤儿 .txt 不进包，只出现在 ``orphan_caption`` 里。
+    * ``extra_files`` 是附带文件（名字 → 字节），目前只有验收清单 ``验收.md``。
+      写入前把 CRLF/CR 统一成 LF，保证包里的文本换行口径一致；与已有条目撞名直接报错，
+      不静默覆盖。
     """
     cfg_path = Path(config_path)
     if not cfg_path.is_file():
@@ -158,6 +165,7 @@ def package(
     ambiguous = scan.ambiguous
     orphan = scan.orphan_caption
 
+    extra_written: list[str] = []
     part = out.with_name(out.name + ".part")
     try:
         with zipfile.ZipFile(part, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -178,6 +186,15 @@ def package(
                         continue
                     archive.write(caption, arcname)
                     written.add(arcname)
+            for name, payload in (extra_files or {}).items():
+                arcname = _arcname(prefix, name)
+                if arcname in written:
+                    raise ExportError(f"附带文件与包里已有条目撞名：{name!r}")
+                # 换行统一成 LF：与 .txt / yaml 的内网口径保持一致，避免 Windows 写出 CRLF。
+                blob = bytes(payload).replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                archive.writestr(arcname, blob)
+                written.add(arcname)
+                extra_written.append(name)
         os.replace(part, out)
     except Exception:
         part.unlink(missing_ok=True)
@@ -191,6 +208,7 @@ def package(
         missing_caption=missing,
         orphan_caption=orphan,
         ambiguous=ambiguous,
+        extra_files=extra_written,
     )
 
 
