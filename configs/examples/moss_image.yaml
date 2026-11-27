@@ -7,7 +7,9 @@
 #   noise_scheduler flowmatch     moss_image.py:202-205
 #   vae_dtype float32             docs/models/moss_image.md:264（官方 VAE fp32）
 #   quantize convrot8             toolkit/models/registry.py:59
-#   timestep_type 未写             调研文档没有口径，走默认（config_modules.py:560），不瞎猜
+#   timestep_type linear           与厂商训练网格对齐：shift 分支等效 shift×2，
+#                                  1024² σ 中位 0.9619 vs linear 0.5005；
+#                                  推理吸附的 training_shift=1.0 网格即 linear（Issue #23 复核）
 #   bucket 能被 16 整除           moss_image.py:207-208
 # 采样 50 步 / CFG 3.0 / shift 5.0（docs/models/moss_image.md:193）
 job: extension
@@ -52,7 +54,7 @@ config:
         use_ema: true
         ema_decay: 0.99
       noise_scheduler: flowmatch
-      timestep_type: shift
+      timestep_type: linear
     sample:
       sample_every: 250
       sample_start_step: 0

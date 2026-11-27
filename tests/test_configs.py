@@ -388,9 +388,13 @@ def test_validate_reports_at_least_five_distinct_errors(cfgs: dict[TargetModel, 
 
 
 def test_moss_timestep_type_is_validated(cfgs: dict[TargetModel, dict]) -> None:
-    """[review #14] 原实现只查 KREA2，MOSS 的 timestep_type 完全没校验。"""
+    """[review #14] 原实现只查 KREA2，MOSS 的 timestep_type 完全没校验。
+
+    MOSS 取 ``linear``：shift 分支等效 shift×2（σ 中位 0.9619 vs 0.5005），
+    推理吸附的 training_shift=1.0 网格就是 linear 网格（Issue #23 复核）。
+    """
     target = TargetModel.MOSS
-    assert _proc(cfgs[target])["train"]["timestep_type"] == "shift"
+    assert _proc(cfgs[target])["train"]["timestep_type"] == "linear"
 
     cfg = copy.deepcopy(cfgs[target])
     _proc(cfg)["train"]["timestep_type"] = "nonsense"

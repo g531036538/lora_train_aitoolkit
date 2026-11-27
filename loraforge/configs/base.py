@@ -284,17 +284,24 @@ def _build_moss(proc: dict[str, Any], plan: TrainingPlan) -> None:
       shift 5（src/pipeline.py:17 DEFAULT_SHIFT=5.0，经 ``sample_shift`` 透传，
       moss_image.py:184）。MOSS 不像 Krea2 那样减 1（moss_image.py:403 直接传）。
     * ``vae_dtype: float32``（docs/models/moss_image.md:264，官方 VAE fp32 口径）。
-    * ``timestep_type: shift``（docs/models/moss_image.md:179）：MOSS 训练调度器
-      ``shift=5.0`` 且 ``use_dynamic_shifting=False``，采样也是 ``sample_shift=5.0``，
-      训练/推理同一条 sigma 表。备选 ``linear``，两档都需实测，标 ``UNVERIFIED``。
+    * ``timestep_type: linear``：与 MOSS 自家训练网格对齐。训练调度器是
+      ``shift=5.0`` + ``use_dynamic_shifting=False``（moss_image.py:72-75,202-205；
+      src/pipeline.py:17 DEFAULT_SHIFT=5.0），而 ``set_train_timesteps`` 的 shift 分支
+      是在 diffusers ``__init__`` **已经 shift 过的端点上再 shift 一次**
+      （custom_flowmatch_sampler.py:147-152,172；diffusers@c9438378
+      scheduling_flow_match_euler_discrete.py ``__init__``），等效 shift 应用两次：
+      1024² 下 σ 中位 0.9619，``linear`` 只有 0.5005。推理 ``moss_sigmas()`` 吸附的
+      ``grid(total, training_shift=1.0)`` 网格正是未 shift 的 linear 网格
+      （src/pipeline.py:27,40,137），所以取 ``linear``。复核记录见 Issue #23。
     """
     proc["train"].update(
         {
             "noise_scheduler": "flowmatch",
             "train_text_encoder": False,
-            # docs/models/moss_image.md:179；shift 分支用固定 self.shift=5.0
-            # （custom_flowmatch_sampler.py:145-174），实测前标 UNVERIFIED。
-            "timestep_type": "shift",
+            # 取 linear：MOSS 的 shift 分支等效 shift×2（σ 中位 0.9619 vs 0.5005），
+            # 且推理吸附的 training_shift=1.0 网格就是 linear 网格。依据见上方
+            # docstring 与 Issue #23 复核（custom_flowmatch_sampler.py:147-152,172）。
+            "timestep_type": "linear",
         }
     )
     proc["model"] = {
