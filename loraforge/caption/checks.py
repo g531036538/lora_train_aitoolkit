@@ -6,11 +6,12 @@
 - ``too_short``       过短 / 标签过少（标黄，信息不够）
 - ``identity_removed`` Krea2 已从原文剥掉身份描述（标黄，提醒输入被改）
 - ``unquoted_text``   MOSS 图内文字没有加引号（标黄，格式提醒）
+- ``token_overflow``   SDXL 打标词超过近似上限（标黄，可能被 CLIP 静默截断）
 - ``duplicate``       多图完全一致，或某标签出现在 >80% 的图上（标黄，泄漏风险）
 
 同一张图有多个问题时合并成一条 ``CheckResult``，message 里用中文分号分开；
-code 按 empty > missing_trigger > too_short > identity_removed >
-unquoted_text > duplicate 取最严重的那个。
+code 按 empty > missing_trigger > token_overflow > too_short >
+identity_removed > unquoted_text > duplicate 取最严重的那个。
 
 ``raw`` 是可选的原图描述映射；不传时行为与旧版完全一致。传了才能发现
 styler 改过用户的输入（Krea2 剥身份、MOSS 文字没加引号）。
@@ -27,7 +28,7 @@ from typing import Literal
 
 from loraforge.caption.base import CaptionContext
 from loraforge.caption.stylers._text import identity_hits
-from loraforge.models import PROFILES
+from loraforge.models import PROFILES, TargetModel
 
 CheckCode = Literal[
     "ok",
@@ -36,9 +37,13 @@ CheckCode = Literal[
     "missing_trigger",
     "identity_removed",
     "unquoted_text",
+    "token_overflow",
     "duplicate",
 ]
 Severity = Literal["info", "warn", "error"]
+
+SDXL_SOFT_TAG_LIMIT = 75
+SDXL_SOFT_WORD_LIMIT = 60
 
 _STRUCTURAL_TAGS = frozenset(
     {
@@ -56,6 +61,7 @@ _STRUCTURAL_TAGS = frozenset(
 _TAG_SPLIT_RE = re.compile(r"[,;\n]+")
 _WEIGHT_RE = re.compile(r"\(([^():]+):\s*[0-9.]+\)")
 _SPACE_RE = re.compile(r"\s+")
+_ENGLISH_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*")
 
 _IDENTITY_LABELS = {
     "face": "脸型",
@@ -164,6 +170,37 @@ def _unquoted_message(line_numbers: list[int]) -> str:
     return f"第 {shown} 行图内文字未加引号；MOSS 要求一行一条，并用引号包住"
 
 
+def _unique_tags(tags: Sequence[str]) -> list[str]:
+    """按首次出现顺序去重；重复标签不该重复占用提示词预算。"""
+    return list(dict.fromkeys(tags))
+
+
+def _token_overflow_message(tags: list[str]) -> str | None:
+    """SDXL 近似 token 上限提示；本机没有 transformers，不精确计数。"""
+    unique = _unique_tags(tags)
+    tag_count = len(unique)
+    word_count = sum(len(_ENGLISH_WORD_RE.findall(tag)) for tag in unique)
+    over_tags = tag_count > SDXL_SOFT_TAG_LIMIT
+    # 标签数已经超过词数软上限时，词数几乎全是标签本身；此时以标签数为准，
+    # 避免「74 个单字标签」被词数误报（74 个标签仍是 74 个词）。
+    over_words = tag_count <= SDXL_SOFT_WORD_LIMIT and word_count > SDXL_SOFT_WORD_LIMIT
+    if not over_tags and not over_words:
+        return None
+
+    counts: list[str] = []
+    if over_tags:
+        counts.append(f"标签数 {tag_count}（软上限 {SDXL_SOFT_TAG_LIMIT}）")
+    if over_words:
+        counts.append(f"英文词数 {word_count}（软上限 {SDXL_SOFT_WORD_LIMIT}）")
+    dedupe_note = "，重复标签已按一次计" if len(tags) != tag_count else ""
+    return (
+        f"{'、'.join(counts)} 超过 SDXL 近似上限，CLIP 可能在 77 token 处静默截断；"
+        "请把标签压到 75 个、正文压到 60 词以内，删掉重复的通用标签，"
+        "或把固定描述挪进采样 prompt。"
+        f"这是近似估算，不是精确 tokenizer 计数{dedupe_note}"
+    )
+
+
 def check_captions(
     pairs: Sequence[tuple[Path, str]],
     ctx: CaptionContext,
@@ -226,9 +263,22 @@ def check_captions(
         if not _has_trigger(text, trigger):
             problems.append(f'缺少触发词 "{trigger}"；身份/风格会学不进去')
 
-        too_short = len(text) < 10 or (style == "tags" and len(tags) < 3)
-        if too_short:
-            problems.append(f"打标词过短（{len(text)} 字符 / {len(tags)} 个标签），LoRA 学不到足够信息")
+        token_note = (
+            _token_overflow_message(tags)
+            if ctx.target == TargetModel.SDXL
+            else None
+        )
+        if token_note:
+            problems.append(token_note)
+
+        too_short_notes: list[str] = []
+        if len(text) < 10:
+            too_short_notes.append(f"打标词过短（{len(text)} 字符），LoRA 学不到足够信息")
+        if style == "tags" and len(tags) < 3:
+            too_short_notes.append(
+                f"标签数只有 {len(tags)} 个（建议 ≥3），信息密度可能不够"
+            )
+        problems.extend(too_short_notes)
 
         identity_note = (
             _identity_message(raw_caption, text)
@@ -277,7 +327,10 @@ def check_captions(
         if not _has_trigger(text, trigger):
             code: CheckCode = "missing_trigger"
             severity: Severity = "error"
-        elif too_short:
+        elif token_note:
+            code = "token_overflow"
+            severity = "warn"
+        elif too_short_notes:
             code = "too_short"
             severity = "warn"
         elif identity_note:
@@ -300,4 +353,11 @@ def check_captions(
     return results
 
 
-__all__ = ["CheckCode", "CheckResult", "Severity", "check_captions"]
+__all__ = [
+    "CheckCode",
+    "CheckResult",
+    "SDXL_SOFT_TAG_LIMIT",
+    "SDXL_SOFT_WORD_LIMIT",
+    "Severity",
+    "check_captions",
+]
