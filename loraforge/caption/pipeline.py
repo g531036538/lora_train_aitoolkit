@@ -47,6 +47,37 @@ class BatchReport:
         return self.failed == 0
 
 
+def _wd_backend_info() -> BackendInfo:
+    """本地 WD tagger 的信息；缺 onnxruntime 或权重都只体现在 available/reason 里。"""
+    try:
+        from loraforge.caption.backends.wd_tagger import (
+            CAPS as WD_CAPS,
+            availability,
+        )
+
+        available, reason = availability()
+        return BackendInfo(
+            key="wd_tagger",
+            label="WD Tagger v3（本地 ONNX，CPU）",
+            caps=WD_CAPS,
+            available=available,
+            reason=reason,
+        )
+    except Exception as exc:  # 连模块都 import 不了：onnxruntime 缺失等
+        return BackendInfo(
+            key="wd_tagger",
+            label="WD Tagger v3（本地 ONNX，CPU）",
+            caps=BackendCaps(
+                needs_gpu=False,
+                supports_tags=True,
+                supports_prose=False,
+                languages=("en",),
+            ),
+            available=False,
+            reason=f"missing_dependency:wd_tagger: 后端模块不可用：{exc}",
+        )
+
+
 def _http_backend_info() -> BackendInfo:
     """HTTP 后端的信息；缺依赖或没配置都只体现在 available/reason 里。"""
     try:
@@ -97,6 +128,7 @@ def list_backends() -> list[BackendInfo]:
                 reason="ok",
             )
         )
+    backends.append(_wd_backend_info())
     backends.append(_http_backend_info())
     return backends
 
@@ -122,6 +154,20 @@ def get_backend(key: str) -> CaptionBackend:
         if not available:
             raise RuntimeError(human_reason(reason))
         return OpenAIVisionBackend()
+
+    if normalized in {"wd_tagger", "wd-tagger", "wdtagger"}:
+        try:
+            from loraforge.caption.backends.wd_tagger import (
+                WdTaggerBackend,
+                availability,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"WD tagger 后端依赖缺失：{exc}") from exc
+
+        available, reason = availability()
+        if not available:
+            raise RuntimeError(human_reason(reason))
+        return WdTaggerBackend()
 
     raise KeyError(f"未知后端：{key!r}")
 
