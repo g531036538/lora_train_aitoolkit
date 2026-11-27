@@ -207,7 +207,7 @@ config:
 | `model.name_or_path` | `krea/Krea-2-Raw` | 训练用 Raw、Turbo 只验收（`README.md:23`；SGLang cookbook 与社区汇编同口径）。仓库名官方 model card 未访问成功 → `UNVERIFIED`，先按 README 口径 |
 | `model.arch` | `krea2`（必写） | 不写会按 `sd1` 加载 pipeline（`config_modules.py:809-831`） |
 | `train.noise_scheduler` | `flowmatch`（必写） | 唯一能进 `set_train_timesteps` 分支的值（见 ② 硬约束 ①） |
-| `train.timestep_type` | `linear` | `set_train_timesteps` 的函数默认值（`custom_flowmatch_sampler.py:117`），1000→1 均匀；`sigmoid`（TrainConfig 默认）在 flow matching 下是随机分布，无依据。**官方仓库只给推理口径**（`krea-ai/krea-2 README:70-72` 的 `--y1 0.5` / `--y2 1.15` / `--mu`），全文没有 LoRA 训练该用哪档 timestep；`shift` 会走 Krea2 的 `use_dynamic_shifting=True` 按图像 token 数算 mu（1024²、patch 2 → image_seq_len 4096 → mu≈0.91，落在官方 0.5–1.15 区间内），机制上更贴推理分布，但**无实测**，标 `UNVERIFIED` |
+| `train.timestep_type` | `linear` | `set_train_timesteps` 的函数默认值（`custom_flowmatch_sampler.py:117`），1000→1 均匀；`sigmoid`（TrainConfig 默认）在 flow matching 下是随机分布，无依据。**官方仓库只给推理口径**（`krea-ai/krea-2 README:70-72` 的 `--y1 0.5` / `--y2 1.15` / `--mu`），全文没有 LoRA 训练该用哪档 timestep；`shift` 会走 Krea2 的 `use_dynamic_shifting=True` 按图像 token 数算 mu（patch 2、latent 边长/8：512² → image_seq_len 1024 → mu≈0.78；768² → 2304 → ≈0.94；1024² → 4096 → ≈1.06；1280² → 6400 → 1.15，公式 `base_shift 0.5`/`max_shift 1.15`、`max_image_seq_len 6400`），机制上更贴推理分布，但**无实测**，标 `UNVERIFIED` |
 | `network.linear` / `linear_alpha` | `32` / `32` | 契约默认（`docs/ARCHITECTURE.md:100-101`），与社区二手汇编一致（`_community-evidence.md`） |
 | `train.steps` | `2500` | 契约默认（`:99`）；社区二手汇编同值。实际 epochs 按「张数×num_repeats×len(resolutions)」核对 |
 | `train.lr` | `1e-4` | 契约默认（`:102`）；社区汇编同值（保守档 5e-5）。**源码默认是 `1e-6`**（`config_modules.py:387`），1e-4 是本项目选择不是源码结论 |
@@ -286,7 +286,7 @@ config:
 |---|---|---|---|
 | 1 | `krea/Krea-2-Raw` 是否为官方训练底座、参数量多少 | 变体性质与采样配方已由 SGLang cookbook 佐证（Raw = 非蒸馏 base，~52 步 / 生效 guidance 4.5 → yaml 5.5；Turbo = 8 步蒸馏）；HF `api.json` 确认存在、105,924 downloads、`gated: auto`、`license: other`、55 文件，但 **model card 需登录接受许可（HTTP 401）**，权重/参数量细节仍缺 | 接受许可后读 model card / `config.json`；或读 diffusers `Krea2Pipeline` 文档 |
 | 2 | `lr=1e-4`、`rank=32`、2500 步是否为 Krea2 最优 | 契约默认 + 第三方仓库二手校准（约 6★），两条独立但都非实测 | 对照训练：rank 16/32/64 × lr 5e-5/1e-4，固定种子出样图 |
-| 3 | `timestep_type: linear` vs `shift` 的训练差异 | 只有代码机制：`linear` 是函数默认值；`shift` 会走 `use_dynamic_shifting` 的 mu 插值（1024² ≈ 0.91）。**官方仓库只有推理 mu 口径（`--y1 0.5` / `--y2 1.15`），没有训练 timestep 指导**；社区 `linear` 是二手，无官方背书 | 同数据两档对照，看收敛速度与细节/结构平衡 |
+| 3 | `timestep_type: linear` vs `shift` 的训练差异 | 只有代码机制：`linear` 是函数默认值；`shift` 会走 `use_dynamic_shifting` 的 mu 插值（512²≈0.78、768²≈0.94、1024²≈1.06、1280²=1.15）。**官方仓库只有推理 mu 口径（`--y1 0.5` / `--y2 1.15`），没有训练 timestep 指导**；社区 `linear` 是二手，无官方背书。另查：PR #947（closed、**未合并**）曾报告 `shift` 下 `patch_size` 回退为 1 导致 mu 失真；当前 main 已有 `SingleMMDiTConfig.patch_size` 属性（`krea2/src/mmdit.py:129-131`，注释写明「trainer probes config.patch_size」），该问题在当前源码不存在 | 同数据两档对照，看收敛速度与细节/结构平衡 |
 | 4 | 24GB 是否必须 `quantize: true` | SGLang cookbook 给 DiT bf16 ≈24 GB（第三方部署实测）→ 24GB 单卡几乎必然需要量化/offload；训练侧（LoRA 梯度 + 激活 + 9B TE）仍未实测 | 一次 24GB 实跑，记录峰值显存 |
 | 5 | 量化 + `diff_output_preservation` 能否共存 | 量化模型 `can_merge_in=False`（`BaseSDTrainProcess.py:1985-2000`），DOP 依赖 base 输出对照 | 需读 DOP 的 loss 路径确认是否依赖 merge |
 | 6 | Krea2 上 `content_or_style` 的实际差别 | 只有 timestep 分布机制（`BaseSDTrainProcess.py:1231-1310`） | 两档各跑一次同数据 |
