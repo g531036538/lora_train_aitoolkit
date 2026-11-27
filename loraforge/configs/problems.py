@@ -157,10 +157,26 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
         "docs/models/moss_image.md:195：uncond_skip_layers 是推理侧 SLG 口径，"
         "训练侧源码未见读取，只影响采样预览出图；判 error 会拦住合法训练配置",
     ),
+    "model.train-variant": (
+        "warn",
+        # docs/models/_review-severity.md §六：kohya README 明确 Base 与 SFT 都支持
+        # LoRA（:47,67），训 SFT 不必然失败，只是偏离官方「TRAIN on Raw/Base」口径；
+        # 判 error 会变成假阳性。
+        "训练底座指向出图侧变体（MOSS-Image-SFT / Krea-2-Turbo）：官方口径是"
+        "MOSS 用 Base 训、Krea 2 TRAIN on Raw / RUN on Turbo；训练仍能跑，只是偏离推荐",
+    ),
     "model.quantize-on-sdxl": (
         "warn",
         "toolkit/config_modules.py:697-698 注明量化只对 transformer 系生效，"
         "SDXL 写了等于没写，不会失败",
+    ),
+    "model.quantize-with-offloading": (
+        "warn",
+        # ai-toolkit issue #1057：INT8 量化 + 100% layer offloading 训练正常但 LoRA
+        # 推理无效。单用户报告、无方法学复现，且该组合本身合法，所以只提示不拦。
+        "量化与 layer_offloading 同开：有报告称训练正常但导出的 LoRA 推理无效"
+        "（ai-toolkit issue #1057），且 qtype 会被静默改写（config_modules.py:724-727）；"
+        "省显存建议只开一个",
     ),
     "model.qtype-unknown": (
         "warn",
@@ -345,15 +361,21 @@ def _target(target: TargetModel | str) -> TargetModel:
 
 
 def _resolve_arch_hint(target: TargetModel, model: dict[str, Any]) -> bool:
-    """模型路径是否属于该 target 的家族。"""
-    name = str(model.get("name_or_path") or "").lower()
-    if not name:
+    """模型路径是否属于该 target 的家族。
+
+    本地权重文件名常带下划线/点（``moss_image_base.safetensors``），先归一成
+    ``-`` 再匹配，否则会被误判成「不是 MOSS」（docs/models/_review-severity.md §六）。
+    原始写法也一并保留匹配，避免 ``sd_xl`` 归一后拆成 ``sd-xl`` 反而漏判。
+    """
+    raw = str(model.get("name_or_path") or "").lower()
+    if not raw:
         return False
+    name = raw.replace("_", "-").replace(".", "-")
     if target is TargetModel.SDXL:
-        return "stable-diffusion-xl" in name or "sdxl" in name
+        return any("stable-diffusion-xl" in s or "sdxl" in s or "sd-xl" in s for s in (raw, name))
     if target is TargetModel.KREA2:
-        return name.startswith("krea/") or "krea-2" in name
-    return "moss-image" in name
+        return any(s.startswith("krea/") or "krea-2" in s for s in (raw, name))
+    return any("moss-image" in s for s in (raw, name))
 
 
 def _positive(value: Any) -> bool:
@@ -526,6 +548,41 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
                     "这是推理侧参数，不影响训练，只是采样预览的对照组会不齐",
                 )
             )
+
+    # docs/models/_review-severity.md §六：训练底座落在出图侧变体上。
+    # 官方口径 MOSS 用 Base 训、Krea 2 TRAIN on Raw / RUN on Turbo；能训，只提示。
+    name_lower = str(model.get("name_or_path") or "").lower()
+    if t is TargetModel.MOSS and "sft" in name_lower:
+        problems.append(
+            _problem(
+                "model.train-variant",
+                "model.name_or_path 指向 MOSS-Image-SFT；官方建议用 MOSS-Image-Base "
+                "训练 LoRA（SFT 是出图侧）。见 USERGUIDE 第 5 节",
+            )
+        )
+    elif t is TargetModel.KREA2 and "turbo" in name_lower:
+        problems.append(
+            _problem(
+                "model.train-variant",
+                "model.name_or_path 指向 Krea-2-Turbo；官方口径是"
+                " TRAIN on Raw、RUN on Turbo",
+            )
+        )
+
+    # 量化 + layer_offloading 同开：issue #1057 的单用户报告，且组合本身合法，只提示。
+    quantized = bool(model.get("quantize") or model.get("quantize_te"))
+    offloaded = bool(model.get("layer_offloading") or model.get("auto_memory"))
+    if quantized and offloaded:
+        problems.append(
+            _problem(
+                "model.quantize-with-offloading",
+                "model.quantize/quantize_te 与 layer_offloading（旧名 auto_memory）"
+                "同时开启：已有报告称 INT8 量化 + 100% layer offloading 会让训练正常"
+                "但导出的 LoRA 推理无效（ai-toolkit issue #1057），且 layer_offloading "
+                "为真时 qfloat8 会被静默改写成 float8（toolkit/config_modules.py:724-727）。"
+                "24 GB 省显存建议只开一个",
+            )
+        )
 
     # ---- 训练段 -----------------------------------------------------------
     train = proc.get("train")
