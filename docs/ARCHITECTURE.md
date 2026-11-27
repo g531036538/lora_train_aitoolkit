@@ -140,6 +140,34 @@ class ExportReport:
 
 导出前必须做一次配对自检，把「有图无标」和「有标无图」都报出来。
 
+### 4.1 透明底合成（`loraforge/export/flatten.py`）
+
+真图集里 55/86 张 PNG 带真透明通道。ai-toolkit 读到 RGBA 会自己转 RGB，
+透明区变黑还是变白不确定——**训练前必须消掉**。原图不许动。
+
+```python
+def flatten_alpha(
+    images: Sequence[Path], out_dir: Path,
+    *, background: tuple[int, int, int] = (255, 255, 255),
+    copy_sidecar: bool = True,
+) -> FlattenReport
+
+@dataclass
+class FlattenReport:
+    items: list[tuple[Path, Path | None, str | None]]  # 源、产物、错误原因
+    written: int
+    failed: int
+```
+
+规则：
+
+1. 产物写进**新目录** `out_dir`，`out_dir` 已有同名文件就报错跳过，**绝不覆盖**原图。
+2. 一律输出 RGB PNG（无 alpha）；`copy_sidecar=True` 时把同名 `.txt` 一并复制过去，
+   内容逐字节不变——打标词与图必须继续配对。
+3. 单张失败不中断整批，记进 `items` 的第三个字段（中文原因）。
+4. 界面提供「合成到纯色底（生成新目录）」动作，纯色默认白，可选黑/灰，
+   显示 `written/failed`，并提示「原图没有改动」。
+
 ---
 
 ## 5. 质量闸门（`loraforge/caption/checks.py`）
