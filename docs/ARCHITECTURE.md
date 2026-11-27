@@ -190,7 +190,7 @@ class BackendInfo:
     label: str          # 给人看的名字
     caps: BackendCaps
     available: bool     # 依赖/权重是否就绪
-    reason: str         # available=False 时写缺什么；True 时为空串
+    reason: str         # 前缀式，见下方词表；available=True 时写 "ok"，不是空串
 
 def list_backends() -> list[BackendInfo]:
     """列出全部已知后端。不得抛异常：不可用的也要列出来并说明原因。
