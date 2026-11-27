@@ -88,7 +88,7 @@ def test_ok_tag_count_uses_deduplicated_tags() -> None:
     assert "（81 个标签" not in result.message
 
 
-def test_identical_captions_are_warned_on_every_image() -> None:
+def test_identical_captions_point_at_both_positions() -> None:
     text = "my_tok, 1girl, solo, red dress"
     results = check_captions(
         [(Path("a.png"), text), (Path("b.png"), text), (Path("c.png"), text)],
@@ -96,8 +96,10 @@ def test_identical_captions_are_warned_on_every_image() -> None:
     )
     assert all(r.code == "duplicate" and r.severity == "warn" for r in results)
     messages = {r.image.name: r.message for r in results}
-    assert "b.png" in messages["a.png"] and "c.png" in messages["a.png"]
-    assert "完全一致" in messages["a.png"]
+    # 每张都指向「最早那张一字不差的图」，序号成对出现（小的在前）。
+    assert "第 1 张与第 2 张打标词完全相同" in messages["a.png"]
+    assert "第 1 张与第 3 张打标词完全相同" in messages["c.png"]
+    assert ">80%" not in messages["a.png"]
 
 
 def test_identical_prose_is_also_warned() -> None:
@@ -107,46 +109,18 @@ def test_identical_prose_is_also_warned() -> None:
         ctx(TargetModel.KREA2, trigger="my_tok"),
     )
     assert all(r.code == "duplicate" and r.severity == "warn" for r in results)
+    assert "第 1 张与第 2 张打标词完全相同" in results[0].message
 
 
-def test_high_frequency_tag_is_warned_with_removal_hint() -> None:
+def test_shared_tag_without_identical_captions_is_not_per_image_duplicate() -> None:
+    """「某个标签出现在多数图上」不再按图报——那是整批体检 dataset.py 的事。"""
     pairs = [
         (Path(f"{i}.png"), f"my_tok, 1girl, solo, red dress, unique{i} hat")
-        for i in range(4)
-    ]
-    results = check_captions(pairs, ctx())
-    assert all(r.code == "duplicate" and r.severity == "warn" for r in results)
-    assert all('"red dress"' in r.message for r in results)
-    assert all(">80%" in r.message for r in results)
-    assert all("丢弃列表" in r.message for r in results)
-
-
-def test_tag_at_exactly_80_percent_is_not_flagged() -> None:
-    pairs = [
-        (Path(f"{i}.png"), f"my_tok, 1girl, solo, red dress, unique{i} hat")
-        for i in range(4)
-    ]
-    pairs.append((Path("4.png"), "my_tok, 1girl, solo, blue coat, unique4 scarf"))
-    results = check_captions(pairs, ctx())
-    assert all("red dress" not in r.message for r in results)
-
-
-def test_structural_tags_are_not_flagged_as_leaks() -> None:
-    pairs = [
-        (Path(f"{i}.png"), f"my_tok, 1girl, solo, unique{i} hat")
         for i in range(4)
     ]
     results = check_captions(pairs, ctx())
     assert all(r.code == "ok" for r in results)
-
-
-def test_trigger_is_not_flagged_as_leak() -> None:
-    pairs = [
-        (Path(f"{i}.png"), f"my_tok, 1girl, solo, unique{i} hat")
-        for i in range(4)
-    ]
-    results = check_captions(pairs, ctx())
-    assert all('"my_tok"' not in r.message for r in results)
+    assert all("red dress" not in r.message for r in results)
 
 
 def test_single_problem_uses_its_own_code() -> None:
