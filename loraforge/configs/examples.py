@@ -98,7 +98,10 @@ def render_example(target: TargetModel) -> str:
     plan = plan_for_tier(target, "24", **EXAMPLE_PLAN)
     # 示例的头部是手写的长说明，所以拿不带默认头部的本体；渲染口径统一在
     # render_train_config 里（纯 LF、\n 结尾、键序与 build_config 一致）。
-    return HEADERS[target] + render_train_config(target, plan, header=False).decode("utf-8")
+    # portable=False：示例里的 "./datasets/my_character" 是给读者看的相对路径，
+    # README 也是这么讲的；可移植命名是导出 zip 才需要的事（Issue #69）。
+    body = render_train_config(target, plan, header=False, portable=False)
+    return HEADERS[target] + body.decode("utf-8")
 
 
 def write_examples(directory: str | pathlib.Path) -> list[pathlib.Path]:
