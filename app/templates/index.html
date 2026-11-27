@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LoRAForge · 本地界面</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #262b36; --ink: #e8ebf2;
+    --muted: #98a2b3; --accent: #6aa9ff; --ok: #3ddc97; --warn: #ffc75f; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  header { padding: 28px 32px 8px; }
+  h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: .3px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { padding: 16px 32px 64px; display: grid; gap: 22px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+  h2 { margin: 0 0 4px; font-size: 16px; }
+  .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; background: #12151b; }
+  .card h3 { margin: 0 0 2px; font-size: 15px; }
+  .key { font-family: ui-monospace, Consolas, monospace; color: var(--muted); font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 84px 1fr; gap: 3px 10px; font-size: 13px; margin: 10px 0 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+  ul.notes { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+  td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; border: 1px solid; }
+  .tag.ok { color: var(--ok); border-color: #24503d; }
+  .tag.bad { color: var(--bad); border-color: #5a2a2a; }
+  .tag.warn { color: var(--warn); border-color: #5c4a1f; }
+  tr.unavailable { background: #1d1618; }
+  tr.unavailable td.reason { color: #ffb3b3; }
+  form.export { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 16px; align-items: end; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], select { width: 100%; padding: 8px 10px; border-radius: 6px;
+        border: 1px solid var(--line); background: #0d0f14; color: var(--ink); font-size: 13px; }
+  input[type=text]:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .actions { grid-column: 1 / -1; display: flex; gap: 12px; align-items: center; }
+  button { padding: 9px 20px; border-radius: 6px; border: 1px solid #2d5fa8; background: #2563eb;
+           color: #fff; font-size: 13.5px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #result { grid-column: 1 / -1; margin-top: 4px; font-size: 13px; }
+  #result pre { background: #0d0f14; border: 1px solid var(--line); border-radius: 6px;
+                padding: 10px 12px; overflow-x: auto; font-size: 12px; }
+  .pill-list { margin: 12px 0 0; padding: 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill-list li { font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+                  border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LoRAForge</h1>
+  <div class="sub">SDXL / Krea 2 / MOSS-Image 的 LoRA 打标与训练配置 · 本机界面</div>
+</header>
+
+<main>
+  <section aria-labelledby="models-title">
+    <h2 id="models-title">目标模型</h2>
+    <p class="hint">清单直接读 <code>loraforge.models.PROFILES</code>；默认参数读 <code>default_plan()</code>，界面不写死任何数值。</p>
+    <div class="grid">
+      {% for m in models %}
+      <article class="card">
+        <h3>{{ m.label }} <span class="key">{{ m.key }}</span></h3>
+        <dl class="kv">
+          <dt>训练底座</dt><dd>{{ m.train_base }}</dd>
+          <dt>验收底座</dt><dd>{{ m.verify_base }}</dd>
+          <dt>打标风格</dt><dd>{{ m.caption_style }}</dd>
+          <dt>默认步数</dt><dd>{{ m.plan.steps }}（rank {{ m.plan.rank }} / alpha {{ m.plan.alpha }}）</dd>
+          <dt>默认学习率</dt><dd>{{ m.plan.lr }}</dd>
+          <dt>默认分辨率</dt><dd>{{ m.plan.resolutions | join(" / ") }}</dd>
+        </dl>
+        {% if m.notes %}
+        <ul class="notes">
+          {% for note in m.notes %}<li>{{ note }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    <ul class="pill-list">
+      <li>数据集类型</li>
+      {% for kind in kinds %}<li>{{ kind }}</li>{% endfor %}
+    </ul>
+  </section>
+
+  <section aria-labelledby="backends-title">
+    <h2 id="backends-title">打标后端</h2>
+    <p class="hint">清单读 <code>list_backends()</code>；不可用的后端也列出来，并在「说明」里写明原因，不静默消失。</p>
+    <table>
+      <thead>
+        <tr><th>key</th><th>名称</th><th>状态</th><th>能力</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        {% for b in backends %}
+        <tr class="{{ '' if b.available else 'unavailable' }}">
+          <td class="mono">{{ b.key }}</td>
+          <td>{{ b.label }}</td>
+          <td>
+            {% if b.available %}<span class="tag ok">可用</span>
+            {% else %}<span class="tag bad">不可用</span>{% endif %}
+          </td>
+          <td>
+            {% if b.supports_tags %}标签{% endif %}
+            {% if b.supports_tags and b.supports_prose %} + {% endif %}
+            {% if b.supports_prose %}自然语言{% endif %}
+            {% if b.needs_gpu %}<span class="tag warn">需 GPU</span>{% endif %}
+            <span class="key">{{ b.languages | join("/") }}</span>
+          </td>
+          <td class="reason">{{ b.reason_text }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section aria-labelledby="tiers-title">
+    <h2 id="tiers-title">显存档位</h2>
+    <p class="hint">读 <code>VRAM_TIERS</code>，切换档位只改批量、分辨率上限与量化，不改 LoRA 维度。</p>
+    <table>
+      <thead><tr><th>档位</th><th>量化</th><th>batch</th><th>分辨率上限</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for t in tiers %}
+        <tr>
+          <td class="mono">{{ t.label }}</td>
+          <td class="mono">{{ t.quantize }}</td>
+          <td class="mono">{{ t.batch_size }}</td>
+          <td class="mono">{{ t.max_resolution }}</td>
+          <td class="hint" style="margin:0">{{ t.note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section aria-labelledby="export-title">
+    <h2 id="export-title">导出</h2>
+    <p class="hint">按表单参数生成 yaml → <code>validate_config</code> 有硬错就拒绝 → <code>package()</code> 打包；缺打标词与孤儿 txt 会在结果里逐条列出。</p>
+    <form class="export" id="export-form">
+      <div>
+        <label for="dataset_dir">图集目录（本机绝对路径）</label>
+        <input type="text" id="dataset_dir" name="dataset_dir" placeholder="D:\\datasets\\my_character" required>
+      </div>
+      <div>
+        <label for="out_zip">导出 zip 路径</label>
+        <input type="text" id="out_zip" name="out_zip" placeholder="D:\\datasets\\my_character.zip" required>
+      </div>
+      <div>
+        <label for="model">目标模型</label>
+        <select id="model" name="model">
+          {% for m in models %}
+          <option value="{{ m.key }}" {{ 'selected' if m.key == default_model else '' }}>{{ m.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="trigger">触发词</label>
+        <input type="text" id="trigger" name="trigger" placeholder="mytoken" required>
+      </div>
+      <div>
+        <label for="vram_tier">显存档位</label>
+        <select id="vram_tier" name="vram_tier">
+          {% for t in tiers %}
+          <option value="{{ t.key }}" {{ 'selected' if t.key == default_tier else '' }}>{{ t.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="include_images" name="include_images" value="1" checked>
+        <label for="include_images" style="margin:0">把训练图一起打进 zip</label>
+      </div>
+      <div class="actions">
+        <button type="submit" id="submit-btn">生成 yaml 并导出</button>
+        <span class="hint" style="margin:0">校验不过不会生成任何文件</span>
+      </div>
+      <div id="result" role="status" aria-live="polite"></div>
+    </form>
+  </section>
+</main>
+
+<script>
+(function () {
+  var form = document.getElementById("export-form");
+  var out = document.getElementById("result");
+  var btn = document.getElementById("submit-btn");
+
+  function line(label, value, color) {
+    var p = document.createElement("div");
+    p.textContent = label + "：" + value;
+    if (color) { p.style.color = color; }
+    return p;
+  }
+
+  function list(title, items, color) {
+    var box = document.createElement("div");
+    box.appendChild(line(title, String(items.length), color));
+    if (items.length) {
+      var pre = document.createElement("pre");
+      pre.textContent = items.join("\n");
+      box.appendChild(pre);
+    }
+    return box;
+  }
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var body = new FormData(form);
+    if (!body.get("include_images")) { body.set("include_images", "0"); }
+    btn.disabled = true;
+    out.textContent = "导出中…";
+    fetch("/export", { method: "POST", body: body })
+      .then(function (resp) { return resp.json().then(function (data) { return { status: resp.status, data: data }; }); })
+      .then(function (res) {
+        var data = res.data;
+        out.textContent = "";
+        if (!data.ok && data.errors) {
+          out.appendChild(line("导出被拒绝（" + data.stage + "）", "", "#ff6b6b"));
+          out.appendChild(list("问题", data.errors, "#ff6b6b"));
+          return;
+        }
+        var head = data.ok ? "导出完成" : "已打包，但有问题需要处理";
+        out.appendChild(line(head, data.zip, data.ok ? "#3ddc97" : "#ffc75f"));
+        out.appendChild(line("图片 / 打标", data.images + " / " + data.captions));
+        if (data.missing_caption.length) { out.appendChild(list("缺打标词的图", data.missing_caption, "#ff6b6b")); }
+        if (data.orphan_caption.length) { out.appendChild(list("没有对应图的 txt", data.orphan_caption, "#ffc75f")); }
+        if (data.ambiguous && data.ambiguous.length) { out.appendChild(list("同名冲突", data.ambiguous, "#ff6b6b")); }
+      })
+      .catch(function (err) {
+        out.textContent = "";
+        out.appendChild(line("请求失败", String(err), "#ff6b6b"));
+      })
+      .then(function () { btn.disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>
