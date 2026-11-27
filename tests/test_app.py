@@ -93,12 +93,14 @@ def test_export_endpoint_writes_zip_and_reports_missing(scratch: Path) -> None:
             "trigger": "mytoken",
             "vram_tier": "24",
             "include_images": "1",
+            "allow_missing": "1",                       # 显式放行才会出包
         },
     )
 
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["ok"] is False                      # 缺一张标，不算干净
+    assert payload["allow_missing"] is True
     assert payload["missing_caption"] == ["frame_02.png"]
     assert payload["images"] == 2 and payload["captions"] == 1
     assert Path(payload["config"]).is_file()
@@ -727,3 +729,150 @@ def test_export_train_yaml_is_byte_identical_to_render_train_config(scratch: Pat
     )
     assert preview.status_code == 200, preview.text
     assert preview.json()["yaml"].encode("utf-8") == expected
+
+
+def test_export_blocks_missing_captions_unless_allowed(scratch: Path) -> None:
+    """缺打标词默认 400：云上开训才发现一半图没标，是最贵的失败。"""
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    for name in ("a.png", "b.png", "c.png"):
+        (dataset / name).write_bytes(b"\x89PNG\r\n\x1a\n")
+    (dataset / "a.txt").write_bytes(b"mytoken, a photo of a person, standing\n")
+    out_zip = scratch / "out.zip"
+    form = {
+        "dataset_dir": str(dataset),
+        "out_zip": str(out_zip),
+        "model": "sdxl",
+        "trigger": "mytoken",
+        "vram_tier": "24",
+    }
+
+    blocked = CLIENT.post("/export", data=form)
+    assert blocked.status_code == 400, blocked.text
+    body = blocked.json()
+    assert body["stage"] == "缺打标词"
+    text = " ".join(body["errors"])
+    assert "2 张图没有打标词" in text
+    assert "b.png" in text and "c.png" in text
+    assert "allow_missing=1" in text
+    assert not out_zip.exists()                        # 拦下来就没落盘
+
+    allowed = CLIENT.post("/export", data={**form, "allow_missing": "1"})
+    assert allowed.status_code == 200, allowed.text
+    payload = allowed.json()
+    assert payload["ok"] is False
+    assert payload["missing_caption"] == ["b.png", "c.png"]
+    assert payload["allow_missing"] is True
+    assert out_zip.is_file()
+
+    (dataset / "b.txt").write_bytes(b"mytoken, a photo of a person, sitting\n")
+    (dataset / "c.txt").write_bytes(b"mytoken, a photo of a person, walking\n")
+    clean = CLIENT.post("/export", data={**form, "out_zip": str(scratch / "clean.zip")})
+    assert clean.status_code == 200, clean.text
+    assert clean.json()["ok"] is True
+    assert clean.json()["missing_caption"] == []
+
+
+def test_export_honours_custom_plan_fields(scratch: Path) -> None:
+    """参数面板改的 steps/rank/alpha/lr/batch 必须进 zip 的 yaml，且与预览逐字节一致。"""
+    from loraforge.configs import plan_for_tier, render_train_config
+
+    dataset = _dataset_with_images(scratch, ("a.png",), with_caption=("a.txt",))
+    out_zip = scratch / "out.zip"
+    custom = {"steps": "2000", "rank": "16", "alpha": "16", "lr": "5e-5", "batch_size": "2"}
+    form = {
+        "dataset_dir": str(dataset),
+        "out_zip": str(out_zip),
+        "model": "sdxl",
+        "trigger": "mytoken",
+        "vram_tier": "24",
+        **custom,
+    }
+
+    response = CLIENT.post("/export", data=form)
+    assert response.status_code == 200, response.text
+
+    plan = plan_for_tier(
+        "sdxl",
+        "24",
+        dataset_dir=str(dataset),
+        trigger="mytoken",
+        steps=2000,
+        rank=16,
+        alpha=16,
+        lr=5e-5,
+        batch_size=2,
+    )
+    expected = render_train_config("sdxl", plan)
+    assert b"steps: 2000" in expected
+    with zipfile.ZipFile(out_zip) as archive:
+        blob = archive.read(f"{dataset.name}/train.yaml")
+    assert blob == expected
+
+    preview = CLIENT.post(
+        "/config/preview",
+        data={"model": "sdxl", "vram_tier": "24", "dataset_dir": str(dataset),
+              "trigger": "mytoken", **custom},
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["plan"]["steps"] == 2000
+    assert preview.json()["plan"]["rank"] == 16
+    assert preview.json()["yaml"].encode("utf-8") == expected
+
+
+def test_review_flags_krea_identity_removed(scratch: Path) -> None:
+    """Krea 标词里写了身份成分 → 页面要真出现 identity_removed 的黄字。"""
+    dataset = _dataset_with_images(scratch, ("a.png",))
+    (dataset / "a.txt").write_bytes(
+        b"mytoken, a 25 year old woman with long black hair and blue eyes, "
+        b"wearing a red dress, smiling in a cafe\n"
+    )
+
+    response = CLIENT.post(
+        "/review",
+        data={"dataset_dir": str(dataset), "model": "krea2", "kind": "character", "trigger": "mytoken"},
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["code"] == "identity_removed"
+    assert item["severity"] == "warn"
+    assert item["severity_label"] == "黄"
+    assert "身份描述" in item["message"]
+    assert "换装时脸不会飘" in item["message"]
+
+
+def test_review_flags_moss_unquoted_text(scratch: Path) -> None:
+    """MOSS 图内文字没加引号 → unquoted_text 的黄字。"""
+    dataset = _dataset_with_images(scratch, ("a.png",))
+    (dataset / "a.txt").write_bytes(
+        b"mytoken, a poster on a brick wall, "
+        b"In-image text: SALE 50% OFF, red and white palette\n"
+    )
+
+    response = CLIENT.post(
+        "/review",
+        data={"dataset_dir": str(dataset), "model": "moss_image", "kind": "text_layout", "trigger": "mytoken"},
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["code"] == "unquoted_text"
+    assert item["severity"] == "warn"
+    assert "未加引号" in item["message"]
+
+
+def test_review_keeps_missing_trigger_red_on_krea(scratch: Path) -> None:
+    """review 会把文字送一遍 styler；不许因此把缺触发词这条红错盖掉。"""
+    dataset = _dataset_with_images(scratch, ("a.png",))
+    (dataset / "a.txt").write_bytes(b"a woman with long black hair, smiling in a cafe\n")
+
+    response = CLIENT.post(
+        "/review",
+        data={"dataset_dir": str(dataset), "model": "krea2", "kind": "character", "trigger": "mytoken"},
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["code"] == "missing_trigger"
+    assert item["severity"] == "error"
