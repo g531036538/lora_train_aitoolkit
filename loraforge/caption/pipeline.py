@@ -158,8 +158,8 @@ def get_backend(key: str) -> CaptionBackend:
     if normalized in {"wd_tagger", "wd-tagger", "wdtagger"}:
         try:
             from loraforge.caption.backends.wd_tagger import (
-                WdTaggerBackend,
                 availability,
+                get_cached_backend,
             )
         except Exception as exc:
             raise RuntimeError(f"WD tagger 后端依赖缺失：{exc}") from exc
@@ -167,7 +167,7 @@ def get_backend(key: str) -> CaptionBackend:
         available, reason = availability()
         if not available:
             raise RuntimeError(human_reason(reason))
-        return WdTaggerBackend()
+        return get_cached_backend()
 
     raise KeyError(f"未知后端：{key!r}")
 
