@@ -249,6 +249,30 @@
       </div>
       <div id="caption-result" role="status" aria-live="polite"></div>
     </form>
+
+    <hr class="sep">
+
+    <form class="export" id="flatten-form">
+      <div>
+        <label for="flat_dir">图集目录（只读源图）</label>
+        <input type="text" id="flat_dir" name="dataset_dir" placeholder="和上面同一个目录" required>
+      </div>
+      <div>
+        <label for="flat_out">输出目录（新目录）</label>
+        <input type="text" id="flat_out" name="out_dir" placeholder="D:\datasets\my_character_opaque" required>
+      </div>
+      <div>
+        <label for="flat_background">纯色底</label>
+        <select id="flat_background" name="background">
+          {% for bg in backgrounds %}<option value="{{ bg.key }}">{{ bg.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="actions">
+        <button type="submit" id="flatten-btn">合成到纯色底（生成新目录）</button>
+        <span class="hint" style="margin:0">原图没有改动，只写新目录；同名 .txt 逐字节复制</span>
+      </div>
+      <div id="flatten-result" role="status" aria-live="polite"></div>
+    </form>
   </section>
 
   <section aria-labelledby="review-title">
@@ -427,6 +451,35 @@
   }
 
   // ---- 目录清点 ----------------------------------------------------------
+  // ---- 透明底合成 --------------------------------------------------------
+  document.getElementById("flatten-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var btn = document.getElementById("flatten-btn");
+    var out = document.getElementById("flatten-result");
+    var body = new FormData(event.target);
+    btn.disabled = true;
+    out.textContent = "合成中…（原图不动，只写新目录）";
+    post("/flatten", body)
+      .then(function (res) {
+        var data = res.data;
+        out.textContent = "";
+        if (data.errors) { out.appendChild(failures("合成被拒绝（" + data.stage + "）", data.errors)); return; }
+        out.appendChild(line("输出目录", data.out_dir));
+        out.appendChild(line("底色", data.background + "（" + data.rgb.join(", ") + "）"));
+        out.appendChild(line("写成 / 失败 / 复制打标词",
+                             data.written + " / " + data.failed + " / " + data.copied_captions,
+                             data.failed === 0 ? "#3ddc97" : "#ff6b6b"));
+        if (data.items.length) {
+          out.appendChild(table(["源图", "产物", "说明"], data.items.map(function (item) {
+            return [item.image, item.product || "—", item.error || "OK"];
+          })));
+        }
+        out.appendChild(line("原图", data.note, "#3ddc97"));
+      })
+      .catch(function (err) { out.textContent = ""; out.appendChild(line("合成失败", String(err), "#ff6b6b")); })
+      .then(function () { btn.disabled = false; });
+  });
+
   document.getElementById("scan-form").addEventListener("submit", function (event) {
     event.preventDefault();
     var btn = document.getElementById("scan-btn");

@@ -876,3 +876,112 @@ def test_review_keeps_missing_trigger_red_on_krea(scratch: Path) -> None:
     item = response.json()["items"][0]
     assert item["code"] == "missing_trigger"
     assert item["severity"] == "error"
+
+# ---- 透明底合成 ----------------------------------------------------------
+
+
+def _rgba_png(path: Path, *, fill=(255, 0, 0, 255), corner=(0, 0, 0, 0)) -> Path:
+    """真图集里的 PNG 是带 alpha 的，``_dataset_with_images`` 那种 8 字节假文件合成不了。"""
+    from PIL import Image
+
+    image = Image.new("RGBA", (4, 4), fill)
+    image.putpixel((0, 0), corner)
+    image.save(path, format="PNG")
+    return path
+
+
+def test_flatten_endpoint_writes_rgb_copies_and_copies_captions(scratch: Path) -> None:
+    from PIL import Image
+
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    source = _rgba_png(dataset / "a.png")
+    before = source.read_bytes()
+    (dataset / "a.txt").write_bytes("mytoken, 一只猫\n".encode("utf-8"))
+    out_dir = scratch / "flat"
+
+    response = CLIENT.post(
+        "/flatten",
+        data={"dataset_dir": str(dataset), "out_dir": str(out_dir), "background": "white"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is True
+    assert (body["written"], body["failed"], body["copied_captions"]) == (1, 0, 1)
+    assert body["background"] == "white" and body["rgb"] == [255, 255, 255]
+    assert body["items"][0]["product"] == "a.png"
+    assert "原图没有改动" in body["note"]
+
+    with Image.open(out_dir / "a.png") as product:
+        assert product.mode == "RGB"                       # 输出一律无 alpha
+        assert product.getpixel((0, 0)) == (255, 255, 255)  # 透明角点 → 白底
+    assert (out_dir / "a.txt").read_bytes() == (dataset / "a.txt").read_bytes()
+    assert source.read_bytes() == before                   # 源图一个字节没动
+
+
+def test_flatten_endpoint_refuses_dataset_as_output(scratch: Path) -> None:
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    source = _rgba_png(dataset / "a.png")
+    before = source.read_bytes()
+
+    response = CLIENT.post(
+        "/flatten",
+        data={"dataset_dir": str(dataset), "out_dir": str(dataset), "background": "white"},
+    )
+
+    assert response.status_code == 400
+    assert "原图" in response.json()["errors"][0]
+    assert source.read_bytes() == before
+
+
+def test_flatten_endpoint_reports_existing_target_as_failed(scratch: Path) -> None:
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    _rgba_png(dataset / "a.png")
+    out_dir = scratch / "flat"
+    out_dir.mkdir()
+    existing = out_dir / "a.png"
+    existing.write_bytes(b"keep")
+
+    response = CLIENT.post(
+        "/flatten",
+        data={"dataset_dir": str(dataset), "out_dir": str(out_dir), "background": "gray"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is False
+    assert (body["written"], body["failed"]) == (0, 1)
+    assert "不覆盖" in body["items"][0]["error"]
+    assert existing.read_bytes() == b"keep"
+
+
+def test_flatten_endpoint_rejects_unknown_background(scratch: Path) -> None:
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    _rgba_png(dataset / "a.png")
+    out_dir = scratch / "flat"
+
+    response = CLIENT.post(
+        "/flatten",
+        data={"dataset_dir": str(dataset), "out_dir": str(out_dir), "background": "pink"},
+    )
+
+    assert response.status_code == 400
+    assert "pink" in response.json()["errors"][0]
+    assert not out_dir.exists()
+
+
+def test_page_has_flatten_form_with_all_backgrounds() -> None:
+    response = CLIENT.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    assert 'id="flatten-form"' in page
+    assert 'id="flatten-btn"' in page
+    assert "原图没有改动" in page
+    for key, label in ui.BACKGROUND_LABELS.items():
+        assert f'value="{key}"' in page
+        assert label in page

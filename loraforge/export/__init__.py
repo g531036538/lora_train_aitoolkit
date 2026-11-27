@@ -16,6 +16,7 @@ from loraforge.export.core import (
     package,
     scan_dataset,
 )
+from loraforge.export.flatten import BACKGROUNDS, FlattenError, FlattenReport, flatten_alpha
 from loraforge.export.scan import (
     CAPTIONING_SUFFIXES,
     ScanEntry,
@@ -24,15 +25,19 @@ from loraforge.export.scan import (
 )
 
 __all__ = [
+    "BACKGROUNDS",
     "CAPTIONING_SUFFIXES",
     "CAPTION_SUFFIX",
     "IMAGE_SUFFIXES",
     "DatasetScan",
     "ExportError",
     "ExportReport",
+    "FlattenError",
+    "FlattenReport",
     "ScanEntry",
     "ScanResult",
     "package",
+    "flatten_alpha",
     "scan_dataset",
     "scan_images",
 ]
