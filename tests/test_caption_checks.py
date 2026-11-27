@@ -56,8 +56,8 @@ def test_short_tags_are_warn() -> None:
     result = check_captions([(Path("a.png"), "my_tok, hat")], ctx())[0]
     assert result.code == "too_short"
     assert result.severity == "warn"
-    assert "过短" in result.message
-    assert "2 个标签" in result.message
+    assert "标签数只有 2 个" in result.message
+    assert "信息密度" in result.message
 
 
 def test_short_prose_is_warn() -> None:
