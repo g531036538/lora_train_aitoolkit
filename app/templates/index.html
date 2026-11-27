@@ -47,7 +47,9 @@
   button { padding: 9px 20px; border-radius: 6px; border: 1px solid #2d5fa8; background: #2563eb;
            color: #fff; font-size: 13.5px; cursor: pointer; }
   button:disabled { opacity: .5; cursor: not-allowed; }
-  #result { grid-column: 1 / -1; margin-top: 4px; font-size: 13px; }
+  #result, #flatten-result { grid-column: 1 / -1; margin-top: 4px; font-size: 13px; }
+  #flatten-result table { margin-top: 6px; }
+  #flatten-result th { white-space: nowrap; }
   #result pre { background: #0d0f14; border: 1px solid var(--line); border-radius: 6px;
                 padding: 10px 12px; overflow-x: auto; font-size: 12px; }
   .pill-list { margin: 12px 0 0; padding: 0; list-style: none; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -463,15 +465,31 @@
       .then(function (res) {
         var data = res.data;
         out.textContent = "";
-        if (data.errors) { out.appendChild(failures("合成被拒绝（" + data.stage + "）", data.errors)); return; }
+        if (data.stage) { out.appendChild(failures("合成被拒绝（" + data.stage + "）", data.errors)); return; }
         out.appendChild(line("输出目录", data.out_dir));
         out.appendChild(line("底色", data.background + "（" + data.rgb.join(", ") + "）"));
-        out.appendChild(line("写成 / 失败 / 复制打标词",
-                             data.written + " / " + data.failed + " / " + data.copied_captions,
-                             data.failed === 0 ? "#3ddc97" : "#ff6b6b"));
+        out.appendChild(line("写成", data.written, "#3ddc97"));
+        out.appendChild(line("跳过（已存在，没覆盖、原图没动）", data.skipped,
+                             data.skipped > 0 ? "#f5c451" : undefined));
+        out.appendChild(line("失败（读不了 / 写不了）", data.failed,
+                             data.failed > 0 ? "#ff6b6b" : undefined));
+        out.appendChild(line("复制打标词", data.copied_captions));
+        if (data.skipped > 0) {
+          out.appendChild(line("跳过说明",
+                               "目标目录已有同名文件，" + data.skipped +
+                               " 张全部跳过，没有覆盖、原图也没动。换一个新目录才会重新生成。",
+                               "#f5c451"));
+        }
+        if (data.error_items.length) {
+          out.appendChild(failures("真失败（读不了 / 写不了）", data.error_items.map(function (row) {
+            return row.image + "：" + row.message;
+          })));
+        }
         if (data.items.length) {
-          out.appendChild(table(["源图", "产物", "说明"], data.items.map(function (item) {
-            return [item.image, item.product || "—", item.error || "OK"];
+          var STATUS = { written: "写成", exists: "跳过", failed: "失败" };
+          out.appendChild(table(["源图", "状态", "产物", "说明"], data.items.map(function (item) {
+            return [item.image, STATUS[item.status] || item.status,
+                    item.product || "—", item.error || "OK"];
           })));
         }
         out.appendChild(line("原图", data.note, "#3ddc97"));
