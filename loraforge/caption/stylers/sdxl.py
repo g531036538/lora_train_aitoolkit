@@ -75,6 +75,7 @@ _DROP_TAGS: frozenset[str] = frozenset(
         "high quality",
         "high resolution",
         "highres",
+        "absurdres",
         "8k",
         "4k",
         "ultra detailed",

@@ -47,6 +47,11 @@ def test_sdxl_tags_accepts_tags_argument_and_empty_is_error() -> None:
         SdxlTagsStyler().render("masterpiece, best quality", ctx(TargetModel.SDXL))
 
 
+def test_sdxl_drops_absurdres_like_other_quality_tags() -> None:
+    out = SdxlTagsStyler().render("1girl, absurdres, huge filesize, smile", ctx(TargetModel.SDXL, trigger="tok"))
+    assert out == "tok, 1girl, huge filesize, smile"
+
+
 # ---------------------------------------------------------------------------
 # Krea2：prose
 # ---------------------------------------------------------------------------
@@ -60,13 +65,15 @@ def test_krea2_one_sentence_and_identity_stripped() -> None:
     out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="my_tok"))
     assert out.startswith("my_tok, ")
     assert out.endswith(".")
-    assert "a single woman" in out
+    assert "a photo of a woman" in out
     assert "close-up" in out
     assert "smiling" in out
     assert "red dress" in out
     assert "cafe" in out
     for forbidden in ("black hair", "blue eyes", "pale skin", "round face", "30 year old"):
         assert forbidden not in out
+    # 子句顺序保持后端给的顺序，不再按模板重排
+    assert out.index("close-up") < out.index("smiling") < out.index("red dress") < out.index("cafe")
 
 
 def test_krea2_trigger_case_is_preserved() -> None:
@@ -74,14 +81,49 @@ def test_krea2_trigger_case_is_preserved() -> None:
     assert out.startswith("MyTok, ")
 
 
-def test_krea2_infers_person_from_clothing_or_expression() -> None:
+def test_krea2_does_not_insert_subject() -> None:
+    """有人物线索也不补主语：后端没写主语，styler 就不该替它编一个。"""
     out = Krea2ProseStyler().render("smiling, wearing a red dress", ctx(TargetModel.KREA2))
-    assert out.startswith("A single person,")
+    assert out == "Smiling, wearing a red dress."
+    assert "a single" not in out
+
+
+def test_krea2_keeps_pronoun_and_clause_order() -> None:
+    raw = "She is wearing a white hoodie, sitting on a sofa, in a bright living room."
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="tok"))
+    assert out == "tok, she is wearing a white hoodie, sitting on a sofa, in a bright living room."
+
+
+def test_krea2_dedupes_repeated_clause_without_reordering() -> None:
+    raw = "white hoodie and blue jeans, white hoodie and blue jeans, sitting on a sofa, sky"
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="tok"))
+    assert out == "tok, white hoodie and blue jeans, sitting on a sofa, sky."
 
 
 def test_krea2_only_identity_raises() -> None:
     with pytest.raises(ValueError, match="身份"):
         Krea2ProseStyler().render("long black hair, blue eyes, pale skin", ctx(TargetModel.KREA2))
+
+
+def test_krea2_strips_identity_in_underscore_form() -> None:
+    """下划线写法（Danbooru 形状）同样算身份，不能被漏进 .txt。"""
+    raw = "long_hair, blue_eyes, pale_skin, red coat, rain"
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="sks_person"))
+    assert out == "sks_person, red coat, rain."
+
+
+def test_krea2_keeps_composition_words() -> None:
+    """full body 里的 body 是构图，不是身份：整句必须保留。"""
+    raw = "full body, long hair, red dress"
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="sks_person"))
+    assert out == "sks_person, full body, red dress."
+
+
+def test_krea2_keeps_count_and_crowd_tags() -> None:
+    """1girl / solo / mature female 描述构图与人群，换装时不该漂，保留。"""
+    raw = "1girl, solo, mature female, red dress"
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="sks_person"))
+    assert out == "sks_person, 1girl, solo, mature female, red dress."
 
 
 def test_krea2_empty_raises() -> None:
@@ -147,6 +189,31 @@ def test_moss_labels_stay_english() -> None:
 def test_moss_empty_raises() -> None:
     with pytest.raises(ValueError):
         MossPreciseStyler().render("", ctx(TargetModel.MOSS))
+
+
+def test_moss_invalid_json_fallback_is_cleaned() -> None:
+    """以 ``{`` 开头但解析不了的 JSON：清掉括号与段名前缀，残骸不许进打标词。"""
+    raw = (
+        '{Object: sks_person, a red poster, In-image text: the word "SALE" at the top, '
+        "Appearance: soft lighting, Composition: yellow background"
+    )
+    out = MossPreciseStyler().render(
+        raw, ctx(TargetModel.MOSS, trigger="sks_person", kind=DatasetKind.TEXT_LAYOUT)
+    )
+    assert out.splitlines() == [
+        "Object: sks_person, a red poster",
+        "In-image text:",
+        '"SALE" (role: header)',
+        "Appearance: soft lighting",
+        "Composition: yellow background",
+    ]
+    assert "{" not in out and "}" not in out
+    assert "Appearance: Appearance" not in out
+
+
+def test_moss_unparseable_json_without_content_raises() -> None:
+    with pytest.raises(ValueError):
+        MossPreciseStyler().render("{[", ctx(TargetModel.MOSS))
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,9 @@
 
 身份交给触发词。脸型、发型/发长/发色、眼睛颜色、肤色一律不进打标词，
 否则换装时模型会把身份和衣服绑在一起，脸会跟着漂。
+
+保留后端给的子句顺序：只删身份子句、去掉完全重复的子句，不重排、不补主语、
+不改写代词——后端写「她穿着」就还是「她穿着」，styler 不替它换措辞。
 """
 
 from __future__ import annotations
@@ -9,29 +12,11 @@ from __future__ import annotations
 from loraforge.caption.base import CaptionContext
 
 from ._text import (
-    classify_clause,
-    extract_subject,
-    has_person,
     join_sentence,
     remove_trigger,
     split_clauses,
     strip_identity_clauses,
 )
-
-# 模板顺序：单人 → 取景 → 角度 → 表情 → 头发（只留状态）→ 衣服 → 光 → 背景 → 质感。
-_SLOT_ORDER: tuple[str, ...] = (
-    "framing",
-    "angle",
-    "expression",
-    "hair",
-    "clothing",
-    "light",
-    "background",
-    "object",
-    "texture",
-)
-
-_PERSON_EVIDENCE_SLOTS = frozenset({"expression", "hair", "clothing"})
 
 
 class Krea2ProseStyler:
@@ -59,24 +44,7 @@ class Krea2ProseStyler:
                 "请让后端描述取景、表情、衣服、光或背景，而不是只描述长相"
             )
 
-        subject, rest = extract_subject(clauses)
-        slots: dict[str, list[str]] = {key: [] for key in _SLOT_ORDER}
-        for clause in rest:
-            slots[classify_clause(clause)].append(clause)
-
-        parts: list[str] = []
-        if subject:
-            parts.append(subject)
-        elif any(slots[key] for key in _PERSON_EVIDENCE_SLOTS) or any(
-            has_person(clause) for clause in rest
-        ):
-            # 有表情/衣服/头发状态，说明画面里有人；模板补「单人」但不编造长相。
-            parts.append("a single person")
-
-        for key in _SLOT_ORDER:
-            parts.extend(slots[key])
-
-        body = join_sentence(parts)
+        body = join_sentence(clauses)
         if not body:
             raise ValueError("Krea2 styler 没有拼出可用的句子")
 

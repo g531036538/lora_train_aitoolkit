@@ -318,7 +318,13 @@ def check_captions(
             has_duplicate = True
 
         if not problems:
-            tag_note = f"（{len(tags)} 个标签）" if style == "tags" else ""
+            tag_note = ""
+            if style == "tags":
+                unique_count = len(_unique_tags(tags))
+                if unique_count == len(tags):
+                    tag_note = f"（{unique_count} 个标签）"
+                else:
+                    tag_note = f"（{unique_count} 个标签，重复标签已按一次计，原 {len(tags)} 个）"
             results.append(
                 CheckResult(image=image, code="ok", severity="info", message=f"打标正常{tag_note}")
             )

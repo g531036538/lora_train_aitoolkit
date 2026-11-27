@@ -109,6 +109,29 @@ def _maybe_json(text: str) -> Any | None:
         return None
 
 
+_SECTION_LABEL_RE = re.compile(
+    r"^(?:object|subject|in[-_ ]image[-_ ]text|image text|appearance|look|composition|layout)"
+    r"\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_json_debris(text: str) -> str:
+    """清洗「看起来像 JSON、但解析失败」的文本，避免残骸原样写进打标词。
+
+    只处理以 ``{`` / ``[`` 开头却解析失败的输入：去掉花括号/方括号和
+    ``Object:`` 这类段名前缀，再按逗号重接，让后面的分段逻辑还能正常归类。
+    正常散文不会走到这里。
+    """
+    cleaned = re.sub(r"[{}\[\]]", ",", text)
+    parts: list[str] = []
+    for part in split_clauses(cleaned):
+        part = _SECTION_LABEL_RE.sub("", part).strip()
+        if part:
+            parts.append(part)
+    return ", ".join(parts)
+
+
 def _first_str(data: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = data.get(key)
@@ -192,6 +215,12 @@ def _split_sections(
         raise ValueError("MOSS styler 收到空描述")
 
     text = remove_trigger(text, ctx.trigger)
+    if text.lstrip().startswith(("{", "[")):
+        # json.loads 失败后落到这里：清掉 JSON 残骸（括号、段名前缀），
+        # 否则 ``Object: {Object: a red poster}`` 这种残句会原样进打标词。
+        text = remove_trigger(_strip_json_debris(text), ctx.trigger)
+        if not text:
+            raise ValueError("MOSS styler 收到无法解析的 JSON，也没有可用的文字内容")
     quoted = extract_quoted_texts(text) if allow_quoted_text else []
     clauses = split_clauses(text)
     clauses = _drop_text_clauses(clauses, has_quotes=bool(quoted))

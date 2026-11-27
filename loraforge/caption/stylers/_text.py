@@ -90,67 +90,140 @@ def remove_trigger(text: str, trigger: str) -> str:
 # 注意只删「身份描述」，不删「头发状态」：wet hair / hair blowing in the wind
 # 是这次画面的变化，可以留。
 
-_IDENTITY_PATTERNS: tuple[re.Pattern[str], ...] = (
+_IDENTITY_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     # 年龄（同样属于身份，不写进 Krea2/MOSS）
-    re.compile(r"\b\d+\s*[- ]?year[- ]old\b", re.IGNORECASE),
-    # 发型 / 发长 / 发色（允许 long black hair 这种多形容词）
-    re.compile(
-        r"\b(?:long|short|medium|shoulder[- ]length|waist[- ]length|straight|curly|"
-        r"wavy|coily|kinky|blonde|blond|black|brown|red|ginger|auburn|pink|blue|"
-        r"green|purple|silver|white|gray|grey|dyed)"
-        r"(?:\s+(?:and\s+)?(?:long|short|medium|shoulder[- ]length|waist[- ]length|"
-        r"straight|curly|wavy|coily|kinky|blonde|blond|black|brown|red|ginger|auburn|"
-        r"pink|blue|green|purple|silver|white|gray|grey|dyed))*"
-        r"\s+(?:hair|bangs|fringe)\b",
-        re.IGNORECASE,
+    ("age", re.compile(r"\b\d+\s*[- ]?year[- ]old\b", re.IGNORECASE)),
+    # 发型 / 发长 / 发色：词根 hair，前面允许若干形容词（long black hair）
+    (
+        "hair",
+        re.compile(
+            r"\b(?:long|short|medium|shoulder[- ]length|waist[- ]length|straight|curly|"
+            r"wavy|coily|kinky|blonde|blond|black|brown|red|ginger|auburn|pink|blue|"
+            r"green|purple|silver|white|gray|grey|dyed)"
+            r"(?:\s+(?:and\s+)?(?:long|short|medium|shoulder[- ]length|waist[- ]length|"
+            r"straight|curly|wavy|coily|kinky|blonde|blond|black|brown|red|ginger|auburn|"
+            r"pink|blue|green|purple|silver|white|gray|grey|dyed))*"
+            r"\s+(?:hair|bangs|fringe)\b",
+            re.IGNORECASE,
+        ),
     ),
-    re.compile(
-        r"\b(?:hair|bangs|fringe)\s+(?:color|colour|length|style|texture)\b",
-        re.IGNORECASE,
+    (
+        "hair",
+        re.compile(
+            r"\b(?:hair|bangs|fringe)\s+(?:color|colour|length|style|texture)\b",
+            re.IGNORECASE,
+        ),
     ),
-    re.compile(
-        r"\b(?:hairstyle|haircut|bob cut|pixie cut|ponytail|braid|braids|bun|updo|"
-        r"dreadlocks|mohawk)\b",
-        re.IGNORECASE,
+    (
+        "hair",
+        re.compile(
+            r"\b(?:hairstyle|haircut|bob cut|pixie cut|ponytail|braid|braids|bun|updo|"
+            r"dreadlocks|mohawk)\b",
+            re.IGNORECASE,
+        ),
     ),
     # 眼睛颜色
-    re.compile(
-        r"\b(?:blue|green|brown|hazel|black|red|amber|gray|grey|violet|purple)\s+eyes?\b",
-        re.IGNORECASE,
+    (
+        "eyes",
+        re.compile(
+            r"\b(?:blue|green|brown|hazel|black|red|amber|gray|grey|violet|purple)\s+eyes?\b",
+            re.IGNORECASE,
+        ),
     ),
-    re.compile(r"\beye\s+(?:color|colour)\b", re.IGNORECASE),
+    ("eyes", re.compile(r"\beye\s+(?:color|colour)\b", re.IGNORECASE)),
     # 肤色
-    re.compile(
-        r"\b(?:pale|fair|light|dark|tan|tanned|olive|brown|white|black|bronze|"
-        r"golden|ebony|porcelain)\s+(?:skin|complexion)\b",
-        re.IGNORECASE,
+    (
+        "skin",
+        re.compile(
+            r"\b(?:pale|fair|light|dark|tan|tanned|olive|brown|white|black|bronze|"
+            r"golden|ebony|porcelain)\s+(?:skin|complexion)\b",
+            re.IGNORECASE,
+        ),
     ),
-    re.compile(r"\b(?:skin\s+(?:tone|color|colour)|complexion)\b", re.IGNORECASE),
+    (
+        "skin",
+        re.compile(r"\b(?:skin\s+(?:tone|color|colour)|complexion)\b", re.IGNORECASE),
+    ),
     # 脸型 / 面部结构
-    re.compile(
-        r"\b(?:round|oval|square|heart[- ]shaped|diamond[- ]shaped|triangular|"
-        r"long|angular|chiseled|soft|broad|narrow)\s+face\b",
-        re.IGNORECASE,
+    (
+        "face",
+        re.compile(
+            r"\b(?:round|oval|square|heart[- ]shaped|diamond[- ]shaped|triangular|"
+            r"long|angular|chiseled|soft|broad|narrow)\s+face\b",
+            re.IGNORECASE,
+        ),
     ),
-    re.compile(r"\bface\s+shape\b", re.IGNORECASE),
-    re.compile(r"\b(?:high|prominent|sharp|defined)\s+cheekbones?\b", re.IGNORECASE),
-    re.compile(r"\b(?:sharp|defined|strong|soft)\s+jawline\b", re.IGNORECASE),
+    ("face", re.compile(r"\bface\s+shape\b", re.IGNORECASE)),
+    ("face", re.compile(r"\b(?:high|prominent|sharp|defined)\s+cheekbones?\b", re.IGNORECASE)),
+    ("face", re.compile(r"\b(?:sharp|defined|strong|soft)\s+jawline\b", re.IGNORECASE)),
+    # 五官细节：词根 + 词边界，形容词可有可无（small nose / thin lips / freckles）
+    (
+        "face",
+        re.compile(
+            r"\b(?:(?:round|oval|square|triangular|angular|chiseled|soft|broad|narrow|"
+            r"small|thin|full|pink|red|big|high|prominent|sharp|defined)\s+)?"
+            r"(?:freckles?|mole|moles|lips?|nose|eyebrows?|eyelashes?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    # 体型 / 身体部位：尺寸形容词 + 词根；body 单独出现时由 _PURE_IDENTITY_RE 处理
+    (
+        "body",
+        re.compile(
+            r"\b(?:tall|short|slim|slender|thin|curvy|plus[- ]size|muscular|toned|"
+            r"athletic|stocky|petite)\s+(?:body|breasts?|hips?|waist|thighs?|arms?|legs?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "body",
+        re.compile(r"\btall\s+(?:woman|man|girl|boy|person|lady|guy|figure)\b", re.IGNORECASE),
+    ),
+    ("body", re.compile(r"\bshort\s+stature\b", re.IGNORECASE)),
 )
 
-_IDENTITY_CATEGORY_BY_INDEX: tuple[str, ...] = (
-    "age",
-    "hair",
-    "hair",
-    "hair",
-    "eyes",
-    "eyes",
-    "skin",
-    "skin",
-    "face",
-    "face",
-    "face",
-    "face",
+# 整句就是「形容词 + 词根」时直接删整句（long hair / blue eyes / pale skin / body）。
+_IDENTITY_MODIFIERS = (
+    "long|short|medium|shoulder[- ]length|waist[- ]length|straight|curly|wavy|coily|"
+    "kinky|blonde|blond|black|brown|red|ginger|auburn|pink|blue|green|purple|silver|"
+    "white|gray|grey|dyed|pale|fair|light|dark|tan|tanned|olive|bronze|golden|ebony|"
+    "porcelain|round|oval|square|heart[- ]shaped|diamond[- ]shaped|triangular|angular|"
+    "chiseled|soft|broad|narrow|slim|slender|thin|curvy|plus[- ]size|muscular|toned|"
+    "athletic|stocky|petite"
 )
+_PURE_IDENTITY_RE = re.compile(
+    rf"^(?:(?:{_IDENTITY_MODIFIERS})\s+)*(?:face|hair|bangs|fringe|eyes?|skin|"
+    rf"complexion|freckles?|mole|lips?|nose|eyebrows?|eyelashes?|body|breasts?|"
+    rf"hips?|waist|thighs?|arms?|legs?)$",
+    re.IGNORECASE,
+)
+
+# 构图词里的 body 不算身份：保护起来，避免「full body」被当成「body」删掉。
+_COMPOSITION_PHRASES = ("full body", "upper body", "lower body", "cowboy shot", "portrait")
+_COMPOSITION_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(phrase) for phrase in _COMPOSITION_PHRASES) + r")\b",
+    re.IGNORECASE,
+)
+_COMPOSITION_TOKEN_BASE = 0xE000
+
+
+def _protect_composition(text: str) -> tuple[str, dict[str, str]]:
+    """把构图短语换成占位符，返回 (替换后的文本, 占位符 -> 原文)。"""
+    mapping: dict[str, str] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        token = chr(_COMPOSITION_TOKEN_BASE + len(mapping))
+        mapping[token] = match.group(0)
+        return token
+
+    return _COMPOSITION_RE.sub(replace, text), mapping
+
+
+def _restore_composition(text: str, mapping: dict[str, str]) -> str:
+    for token, phrase in mapping.items():
+        text = text.replace(token, phrase)
+    return text
+
 
 _CONNECTOR = r"(?:with|and|having|featuring|of|has|have|had|got)"
 _DANGLING_RE = re.compile(
@@ -165,17 +238,25 @@ def strip_identity(clause: str) -> str:
 
     例：``a woman with long black hair`` → ``a woman``
         ``long black hair`` → ````
-        ``she has blue eyes`` → ````
+        ``long_hair`` → ````（下划线先归一成空格再判断）
+        ``full body`` → ``full body``（构图词，不是身份）
     """
-    cleaned = clause
+    # 后端可能给 Danbooru 下划线形式（long_hair），先归一成空格再判断。
+    source = clause.replace("_", " ")
+    protected, protected_phrases = _protect_composition(source)
+    if _PURE_IDENTITY_RE.match(protected.strip()):
+        return ""
+
+    cleaned = protected
     matched = False
-    for pat in _IDENTITY_PATTERNS:
-        cleaned, count = pat.subn(" ", cleaned)
+    for _category, pattern in _IDENTITY_RULES:
+        cleaned, count = pattern.subn(" ", cleaned)
         if count:
             matched = True
     if not matched:
         return clause
 
+    cleaned = _restore_composition(cleaned, protected_phrases)
     cleaned = normalize_space(cleaned)
     cleaned = cleaned.strip(" ,;:-")
     cleaned = _DANGLING_RE.sub("", cleaned)
@@ -191,25 +272,21 @@ def strip_identity(clause: str) -> str:
     return cleaned
 
 
-def strip_identity_clauses(clauses: Iterable[str]) -> list[str]:
-    out: list[str] = []
-    for clause in clauses:
-        cleaned = strip_identity(clause)
-        if cleaned:
-            out.append(cleaned)
-    return out
-
-
 def identity_hits(text: str) -> list[tuple[str, str]]:
     """返回文本里命中的身份描述 ``(类别, 原文片段)``，按出现位置排序。
 
-    类别是 ``age`` / ``hair`` / ``eyes`` / ``skin`` / ``face``；
+    类别是 ``age`` / ``hair`` / ``eyes`` / ``skin`` / ``face`` / ``body``；
+    下划线先归一成空格；构图短语（full body 等）不算身份。
     重叠的匹配只保留最长的一条，避免 ``long black hair`` 被数两次。
     """
+    source = text.replace("_", " ")
+    protected, protected_phrases = _protect_composition(source)
     matches: list[tuple[int, int, str, str]] = []
-    for category, pattern in zip(_IDENTITY_CATEGORY_BY_INDEX, _IDENTITY_PATTERNS):
-        for match in pattern.finditer(text):
-            fragment = normalize_space(match.group(0))
+    for category, pattern in _IDENTITY_RULES:
+        for match in pattern.finditer(protected):
+            fragment = normalize_space(
+                _restore_composition(match.group(0), protected_phrases)
+            )
             if fragment:
                 matches.append((match.start(), match.end(), category, fragment))
 
@@ -228,6 +305,15 @@ def identity_hits(text: str) -> list[tuple[str, str]]:
             continue
         seen.add(key)
         out.append((category, fragment))
+    return out
+
+
+def strip_identity_clauses(clauses: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    for clause in clauses:
+        cleaned = strip_identity(clause)
+        if cleaned:
+            out.append(cleaned)
     return out
 
 
