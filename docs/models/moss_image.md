@@ -4,7 +4,7 @@
 >
 > 适用范围：`TargetModel.MOSS_IMAGE` → `build_config()` 产出的 `job: extension / process[type=sd_trainer]` YAML。
 >
-> **先读这条**：MOSS-Image 是「单流 42 层 DiT + Qwen3.5-9B 文本 + FLUX.2 VAE」，5B 量级，flow matching。官方 `USERGUIDE.md:5` 明确**Base 就是给社区训 LoRA 的**（未做 CFG 等推理后训练/蒸馏），`:126-132` 明确**训练时 TE 必须冻结**。注意调度器：**技术报告 Stage 3 末期是 shift=1 网格 + 截断 logit-normal（μ=−1.09, s=0.95, cutoff 0.95, 掺 1% 均匀），shift 5.0 只在推理时加**（`arXiv:2610.23374` Table 2，2026-11-27 读全文）；ai-toolkit 没有 logit-normal 分支、`shift` 又固定 5.0 → 训练侧 `timestep_type` 只能取近似，默认 `shift`（判据见 ③）。文本长度上限 4096 token，是全项目最长的一档。
+> **先读这条**：MOSS-Image 是「单流 42 层 DiT + Qwen3.5-9B 文本 + FLUX.2 VAE」，5B 量级，flow matching。官方 `USERGUIDE.md:5` 明确**Base 就是给社区训 LoRA 的**（未做 CFG 等推理后训练/蒸馏），`:126-132` 明确**训练时 TE 必须冻结**。注意调度器：**技术报告 Stage 3 末期是 shift=1 网格 + 截断 logit-normal（μ=−1.09, s=0.95, cutoff 0.95, 掺 1% 均匀），shift 5.0 只在推理时加**（`arXiv:2610.23374` Table 2，2026-11-27 读全文）；ai-toolkit 没有 logit-normal 分支、`shift` 又固定 5.0 → 训练侧 `timestep_type` 只能取近似，默认 `shift`（判据、σ↔t 换算约定与「待确认」状态见 ③）。文本长度上限 4096 token，是全项目最长的一档。
 
 ---
 
@@ -22,7 +22,7 @@
 | TE 最大长度 | `model_kwargs.max_text_length`，默认 **4096** token | `moss_image.py:70,183` |
 | VAE | FLUX.2 系 `AutoEncoder`（flux2_kl），f8 + **2×2 packing** → 桶对齐量 **16**；默认权重 `vae/diffusion_pytorch_model.safetensors`，可用 `vae_path` 覆盖。官方 README 原文：「The transformer and text encoder use bfloat16; **the VAE and initial noise use float32**. The bundled VAE uses the FLUX.2 small decoder.」 | `moss_image.py:305-320,207-209`、`src/checkpoints.py:44-49`、HF `OpenMOSS-Team/MOSS-Image-Base` README（2026-11-27） |
 | 预测目标 | **flow matching**（`is_flow_matching=True`），预测 velocity | `moss_image.py:166` |
-| 训练调度器 | `get_train_scheduler()` → `CustomFlowMatchEulerDiscreteScheduler(shift=5.0, num_train_timesteps=1000, use_dynamic_shifting=False)` | `moss_image.py:72-75,202-205`、`src/pipeline.py:17` |
+| 训练调度器 | `get_train_scheduler()` → `CustomFlowMatchEulerDiscreteScheduler(shift=5.0, num_train_timesteps=1000, use_dynamic_shifting=False)`；`load_model()` 内 `:344` 会**再赋值一次**同一对象，覆盖构造时传入的调度器 | `moss_image.py:72-75,202-205,344`、`src/pipeline.py:17` |
 | 采样配方（官方） | **Euler + shift 5.0 + steps ≥50 + CFG 3.0（3.0–6.0）**；SLG 跳过层建议 **22**（22/24/26 均可）；关掉 SLG 更真实但细节会塌。官方 README 的 Sampling 表另注明：**默认 guidance 每步要跑两次 transformer forward**（条件 + 负条件分支），`uncond_skip_layers=[]` 可关 SLG 换单次 forward；`negative_prompt` 缺省为空 | `OpenMOSS/MOSS-Image@main USERGUIDE.md`「Inference Parameters」；HF `OpenMOSS-Team/MOSS-Image-Base` README「Sampling」 |
 | 采样默认（源码） | `sample_shift` 默认 `DEFAULT_SHIFT=5.0`，采样时 `shift=self.sample_shift` | `moss_image.py:184,406`、`src/pipeline.py:17` |
 | 无分类器引导跳过层 | `uncond_skip_layers` 默认 `(22,)`（推理期跳过第 22 层求 unconditional） | `src/pipeline.py:20`、`moss_image.py:183-195` |
@@ -131,7 +131,7 @@ config:
 | 字段 | 必填 | 默认 | 取值/范围 | 出处 |
 |---|---|---|---|---|
 | **`noise_scheduler`** | **是（本模型）** | `ddpm` | **必须 `flowmatch`**：只有该值会调 `set_train_timesteps(...)`；其它值走 `set_timesteps()`，`timestep_type` 与 shift 全部不生效 | `config_modules.py:383`、`BaseSDTrainProcess.py:1173-1210` |
-| `timestep_type` | 否 | `sigmoid` | `linear`/`sigmoid`/`shift`/`weighted`…；MOSS 的 `use_dynamic_shifting=False`，`shift` 分支用固定 `self.shift`（=5.0）做 `sigmas = shift*s/(1+(shift-1)*s)` | `config_modules.py:560`、`toolkit/samplers/custom_flowmatch_sampler.py:145-174` |
+| `timestep_type` | 否 | `sigmoid` | `linear`/`sigmoid`/`shift`/`weighted`…；MOSS 的 `use_dynamic_shifting=False`（`moss_image.py:74`），`shift` 分支用固定 `self.shift`（=5.0）做 `sigmas = shift*s/(1+(shift-1)*s)`；generic `get_sampler` 的 flux 兜底（`sampler.py:163-177`，shift 3.0 + dynamic=True）只在模型类没有 `get_train_scheduler` 时生效 | `config_modules.py:560`、`toolkit/samplers/custom_flowmatch_sampler.py:145-174` |
 | `steps` / `lr` / `unet_lr` | 否 | `1000` / `1e-6` / `= lr` | — | `config_modules.py:386-388` |
 | `optimizer` | 否 | `adamw` | 未知名抛 `ValueError` | `:393`、`toolkit/optimizer.py:4-119` |
 | `lr_scheduler` | 否 | `constant` | `cosine/linear/constant/...` | `:395`、`toolkit/scheduler.py:6-57` |
@@ -165,7 +165,7 @@ config:
 ### 两条硬约束
 
 **① `train.noise_scheduler: flowmatch` 是语义开关，不是采样器选择。**
-`BaseSDTrainProcess.py:1752-1755` 先取模型类自带的 `get_train_scheduler`（MOSS 有，返回固定 shift=5.0 的 flowmatch 调度器）；随后 timestep 准备按**字符串**分支（`:1173-1210`）：`== 'flowmatch'` 才调 `set_train_timesteps(timestep_type, latents, patch_size)`，否则 `set_timesteps(1000)`，`timestep_type` 与 shift 都不参与。
+`BaseSDTrainProcess.py:1752-1755` 先取模型类自带的 `get_train_scheduler`（MOSS 有，返回固定 shift=5.0 的 flowmatch 调度器），把它作为 `noise_scheduler=` 传给模型类；`moss_image.py:344`（`load_model()` 内）再赋一次同一对象。`stable_diffusion_model.py:659-660` 的 `self.noise_scheduler = pipe.scheduler` **只在传入为 None 时执行**，训练路径不满足；随后 timestep 准备按**字符串**分支（`:1173-1210`）：`== 'flowmatch'` 才调 `set_train_timesteps(timestep_type, latents, patch_size)`，否则 `set_timesteps(1000)`，`timestep_type` 与 shift 都不参与。
 
 **② `train_text_encoder: true` 是静默空操作，而且官方也要求冻结。**
 TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_special.py:284,678-680`）；MOSS 的 TE 是 Qwen3.5（`Qwen35TextOnlyEncoder`），类名不匹配 → 0 个 TE LoRA，且只打印 skipped 数量不报错。`target_lora_modules` 只覆盖 DiT 侧（`BaseSDTrainProcess.py:1931-1932`、`moss_image.py:168`）。官方 USERGUIDE 的 LoRA 建议同样是「keep the text encoder frozen」——两边一致，这个字段在 MOSS 上没有任何正收益。
@@ -179,7 +179,7 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 | `model.name_or_path` | `OpenMOSS-Team/MOSS-Image-Base` | 官方 `USERGUIDE.md:5` 原文：Base 未做 CFG 等推理后训练/蒸馏，「…to make it easier for the community to train LoRAs」；`:126-132` 的 Post-Training 整节只针对 Base 讲 LoRA（并要求冻结 TE）；`README.md:143` 写 SFT =「Fine-tuned from MOSS-Image-Base on curated data」。**ai-toolkit registry 的 `moss_image` 预置指向 SFT 是推理默认，不是训练底座**（`registry.py:59-60`）→ 训练配置必须写 Base，SFT 只用于出图/验收 |
 | `model.arch` | `moss_image`（必写） | 不写落到 `sd1`（`config_modules.py:809-831`） |
 | `train.noise_scheduler` | `flowmatch`（必写） | 见 ② 硬约束 ① |
-| `train.timestep_type` | `shift`（近似，标 `UNVERIFIED`） | 官方配方在技术报告 **`arXiv:2610.23374` Table 2**：Stage 3 末期（274k–310k 步）是 **shift=1 网格 + 截断 logit-normal（μ=−1.09, s=0.95, cutoff 0.95）+ 1% 均匀**，只有最早 140k 步用 shift=3；kohya 文档复刻的是同一分布。**判据（可复算，不靠偏好）**：训练 σ 要贴近末期分布——按论文公式采样 4M 次得中位 **0.741**、IQR **0.601–0.842**（P10/P25/P50/P75/P90 = 0.456/0.601/0.741/0.842/0.899）。ai-toolkit 三个现成选项：`linear` 分位 0.10/0.25/0.50/0.75/0.90、`sigmoid` 0.217/0.337/0.50/0.662/0.783、`shift`（`self.shift=5.0`）0.357/0.625/0.833/0.937/0.978 → 对末期分布的分位 L1 距离：**`shift` 0.39**、`linear` 1.04、`sigmoid` 1.04。所以 `shift` 是唯一同向且量级接近的选项；`linear`/`sigmoid` 把约一半训练步放在 σ≤0.5 的低噪声区，而末期预训练只有约 1/4 的步在那里。仍不是官方配方：ai-toolkit 无 logit-normal 分支、`shift` 系数写死 5.0（kohya 用 3.0 近似，中位正好 0.75）→ 保留 UNVERIFIED，界面提示 A/B 自测 | `arXiv:2610.23374` Table 2 + 式 (4)（§10.1）；`toolkit/samplers/custom_flowmatch_sampler.py:111-235`；`moss_image.py:74,204`；kohya `docs/moss_image_train_network.md` |
+| `train.timestep_type` | `shift`（近似，标 `UNVERIFIED`） | 官方配方在技术报告 **`arXiv:2610.23374` Table 2**：Stage 3 末期（274k–310k 步）是 **shift=1 网格 + 截断 logit-normal（μ=−1.09, s=0.95, cutoff 0.95）+ 1% 均匀**，只有最早 140k 步用 shift=3；kohya 文档复刻的是同一分布。**换算约定（不写清就无法复算）**：σ=噪声占比，σ=1 纯噪声、σ=0 干净图，`t=σ·T`、T=1000（论文 `σ_j=j/T`；ai-toolkit `timestep = sigma·NUM_TRAIN_TIMESTEPS`，`src/pipeline.py:141`）。**判据（可复算，不靠偏好）**：训练 σ 要贴近末期分布——按论文式 (4) 采样 4M 次得中位 **0.741**、IQR **0.601–0.842**（P10/P25/P50/P75/P90 = 0.456/0.601/0.741/0.842/0.899）。ai-toolkit 三档按 `moss_image.py:74,202-205,344` 这条实际赋值路径自算（该路径已按类定义与赋值点核实，见「训练调度器」行的出处）：`linear` 0.10/0.25/0.50/0.75/0.90、`sigmoid` 0.217/0.337/0.50/0.662/0.783、`shift`（固定 5.0）0.357/0.625/0.833/0.937/0.978 → 对末期分布的分位 L1 距离 **0.39 / 1.04 / 1.04**；`linear`/`sigmoid` 把约一半训练步放在 σ≤0.5 的低噪声区，末期预训练只有约 1/4 的步在那里。数值按这条路径计算；若源码改动赋值来源，需重算。仍不是官方配方：ai-toolkit 无 logit-normal 分支、`shift` 系数写死 5.0（kohya 用 3.0 近似，中位正好 0.75）→ 保留 UNVERIFIED，界面提示 A/B 自测 | `arXiv:2610.23374` Table 2 + 式 (4)（§10.1）；`toolkit/samplers/custom_flowmatch_sampler.py:111-235`；`moss_image.py:74,204`；kohya `docs/moss_image_train_network.md` |
 | `network.linear` / `linear_alpha` | `32` / `32` | 契约默认（`docs/ARCHITECTURE.md:100-101`）。MOSS 无二手校准，沿用项目默认 |
 | `train.steps` | `2500` | 契约默认（`:99`）。注意 `resolution` 列表会复制数据集，steps 要按公式换算 |
 | `train.lr` | `1e-4` | 契约默认（`:102`）；源码默认 `1e-6`（`config_modules.py:387`） |
@@ -299,7 +299,7 @@ TE LoRA 的目标列表写死为 `["CLIPAttention","CLIPMLP"]`（`toolkit/lora_s
 |---|---|---|---|
 | 1 | 精确参数量与各组件权重体积 | HF model card 已于 2026-11-27 取得（`sources.md` §8.1）：确认 5B backbone、42 层、Qwen3.5-9B、FLUX.2 VAE、dtype 口径、Sampling 默认表、两种 forward 口径；仍缺 `config.json` 的精确参数量和 safetensors 分片大小 | 读 HF `config.json` / safetensors index（`urllib` 可达，无需登录） |
 | 2 | 布局 JSON 在**训练** caption 里的正确用法 | 格式已是官方 schema（不再 UNVERIFIED），但 ai-toolkit 不解析；官方未说明训练时该用哪种 caption 形态 | 官方 issue/示例，或训练对照实验 |
-| 3 | `timestep_type` 该用哪档 | 官方配方已知（`arXiv:2610.23374` Table 2：末期 shift=1 网格 + 截断 logit-normal μ=−1.09/s=0.95/cutoff 0.95 + 1% 均匀；σ 中位 0.741、IQR 0.601–0.842）。ai-toolkit 无 logit-normal，`shift` 系数写死 5.0；按 σ 分位距离 `shift`（0.39）远优于 `linear`/`sigmoid`（各 1.04）→ 默认 `shift`，但**不是官方配方** | 同数据 600–800 步 `shift` vs `linear` 对照：文字渲染、结构、loss 曲线；以及「背景/主体发糊」是否随 timestep 分布变化 |
+| 3 | `timestep_type` 该用哪档 | 官方配方已知（`arXiv:2610.23374` Table 2：末期 shift=1 网格 + 截断 logit-normal μ=−1.09/s=0.95/cutoff 0.95 + 1% 均匀；σ 中位 0.741、IQR 0.601–0.842）。ai-toolkit 无 logit-normal，`shift` 系数写死 5.0；按 σ 分位距离（σ=t/T 约定）`shift`（0.39）更接近 `linear`/`sigmoid`（各 1.04）→ 默认 `shift`，但**不是官方配方**；赋值路径已核实：`BaseSDTrainProcess.py:1752-1755` 取类方法 → `:1784` 传入 → `moss_image.py:344` 在 `load_model()` 内再赋一次；`stable_diffusion_model.py:659-660` 只在传入为 None 时用 `pipe.scheduler` | 同数据 600–800 步 `shift` vs `linear` 对照：文字渲染、结构、loss 曲线；以及「背景/主体发糊」是否随 timestep 分布变化 |
 | 4 | 24GB 是否需要 `quantize`、`convrot8` 训练可用性 | 注册表只证明推理可用 | 24GB 实跑记峰值显存 + 出图对比 |
 | 5 | MOSS 的 `lr=1e-4`/`rank=32`/2500 步 | 契约默认，无任何二手校准 | 对照训练 |
 | 6 | `uncond_skip_layers` 在**训练**时是否该设 | 官方推荐 22 是推理口径；训练侧代码未见使用（`src/pipeline.py:20`、`moss_image.py:407`） | 读训练 loss 路径确认是否触发 uncond 分支 |

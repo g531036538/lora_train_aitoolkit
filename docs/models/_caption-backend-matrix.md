@@ -10,15 +10,26 @@
 - **本机跑不了真正的 tagger 与本地 VLM**：缺 `onnxruntime`（tagger 运行时）与 `transformers`（本地 VLM 运行时）。当前只剩两条路——远程 HTTP VLM、或人工/模板兜底。
 - 所以「可用 / 不可用」这一列，指的是**当前这台开发机**；用户机器装不装可选依赖，我们无法替他们验证，只能在界面上给出 `reason`。
 
+- 哪些后端**真的存在**、每个的 `reason` 现在怎么写，见 [`_backend-inventory.md`](./_backend-inventory.md)。设计空间（本文）与已实现清单不要混写。
+
 ## 1. 两种文本体系，不要混成「质量高低」
 
 | | 规范标签（Tagger） | 自然语言（VLM） |
 |---|---|---|
 | 输出形态 | 逗号分隔的受控词表词条，如 `1girl, blue hair, school uniform` | 完整句子/段落 |
 | 谁吃它 | SDXL 及在其标签语料上微调的底模（Illustrious / NoobAI / Pony 系） | Qwen3-VL / Qwen3.5 这类 LLM 文本编码器（Krea 2、MOSS） |
-| 给错模型的后果 | 喂给 Krea 2/MOSS：标签串不是它们被训练的表达形式 | 喂给 SDXL：词不在词表分布里 + 77 token 预算被长句吃光（`_src/ai-toolkit/toolkit/train_tools.py:402-422` 取 `tokenizer.model_max_length`，CLIP=77，超长静默截断） |
+| 给错模型的后果 | 喂给 Krea 2/MOSS：标签串不是它们被训练的表达形式 | 喂给 SDXL：两种**不同**的失败，见 §1.1——分布偏移（词不在词表里）与信息损失（77 token 截断），不是一个问题 |
 
 一句话：**VLM 给 SDXL 打标的问题不是「标签难看」，是「标签不在模型的词表分布里」。** 这条口径按主管 2026-11-27 的纠正写，不是我们的实测。
+
+### 1.1 两个不同的问题，别合并
+
+| 问题 | 机制 | 后果 | 能不能靠写法缓解 |
+|---|---|---|---|
+| **分布偏移** | VLM 产的是自由语言，用词不在 CLIP 训练分布里；tagger 产的是受控词表 | 模型「认不出」这些词，条件信号弱 | **不能**。只能换后端（用 tagger），精简句子没用 |
+| **信息损失** | CLIP-L/G 上限 77 token（`_src/ai-toolkit/toolkit/train_tools.py:402-422` 取 `tokenizer.model_max_length`、`truncate=True` 默认） | 长句被静默截断，**丢掉描述内容** | **能**。人工精简/截短、或只保留变化最强的部分 |
+
+主管 2026-11-27 指出：这两条并列写容易读成一回事。换后端解决第一个，改写法只能缓解第二个。
 
 ## 2. 后端分四类（与 `BackendCaps` 对齐）
 

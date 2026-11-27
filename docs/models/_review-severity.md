@@ -51,18 +51,43 @@
 ## 四、两个要主管/阿配拍板的策略问题
 
 1. **alpha/rank 到底允不允许 <1**：kohya 官方示例是 32/16（0.5），ai-toolkit 默认 4/1.0（0.25）。如果产品只接受 `alpha == rank`，那 `_REGISTRY` 的 error 应改成「只允许 alpha==rank 或 alpha==rank/2」，且必须放过默认值；否则降到 warn。
-2. **MOSS 的 timestep 政策（2026-11-27 已由技术报告解决）**：`arXiv:2610.23374` Table 2 给出 Stage 3 末期配方（shift=1 网格 + 截断 logit-normal μ=−1.09 / s=0.95 / cutoff 0.95 + 1% 均匀），ai-toolkit 没有 logit-normal 分支、`shift` 写死 5.0。按 σ 分位距离，`shift`（0.39）远优于 `linear`/`sigmoid`（各 1.04）→ 默认取 `shift`，标 `UNVERIFIED`；校验层只放行白名单内，不替用户选。详见 `docs/models/moss_image.md` ③ 与 `docs/sources.md` §10。
+2. **MOSS 的 timestep 政策（2026-11-27 已由技术报告解决）**：`arXiv:2610.23374` Table 2 给出 Stage 3 末期配方（shift=1 网格 + 截断 logit-normal μ=−1.09 / s=0.95 / cutoff 0.95 + 1% 均匀），ai-toolkit 没有 logit-normal 分支、`shift` 写死 5.0。按 σ 分位距离（σ=t/T 约定，按 `moss_image.py:344` 路径自算），`shift`（0.39）比 `linear`/`sigmoid`（各 1.04）更接近 → 默认取 `shift`，标 `UNVERIFIED`；校验层只放行白名单内，不替用户选。详见 `docs/models/moss_image.md` ③ 与 `docs/sources.md` §10。
 
 ## 五、对 `loraforge/configs/base.py` 默认值的影响（2026-11-27 追加）
 
 | 默认值 | 现状（`d35b9a91`） | 建议 | 依据 |
 |---|---|---|---|
-| MOSS `train.timestep_type` | `shift` | **保留 `shift`**，但注释改成「近似官方末期 σ 分布，非官方配方」，并把 `moss_image.md` 的 UNVERIFIED 标注带进界面提示 | `arXiv:2610.23374` Table 2；σ 分位距离 `shift` 0.39 vs `linear`/`sigmoid` 1.04 |
+| MOSS `train.timestep_type` | `shift` | **保留 `shift`**，但注释改成「近似官方末期 σ 分布，非官方配方」，并把 `moss_image.md` 的 UNVERIFIED 标注带进界面提示 | `arXiv:2610.23374` Table 2；σ 分位（σ=t/T）`shift` 0.39 vs `linear`/`sigmoid` 1.04；赋值路径 `moss_image.py:344` |
 | MOSS `model.name_or_path` | Base（正确） | 保留；若界面按 registry 预置填了 SFT，需要拦一下——**`moss_image` 预置是推理默认，不是训练底座** | `USERGUIDE.md:5,126-132`；`registry.py:59-60` |
 | Krea2 `train.timestep_type` | `linear` | 保留 `linear`，但注明「官方无训练口径、社区二手」；`shift`（1024² 时 mu≈0.91）作为对照写进注释 | `krea-ai/krea-2 README:70-72,110`；`krea2.py:87-97` |
 
 - 这三条都是**默认值**，不是校验规则：`validate_config` 不因 `timestep_type` 取 `linear` 或 `shift` 报错（白名单内即可），只对白名单外的值报错。
 - 需要阿配改代码的只有一处：MOSS 默认值的注释与界面提示文案。`shift` 的数值不用动。
+
+## 六、待阿配实现：训练底座变体校验（MOSS Base / Krea2 Raw）
+
+**现状：这两类误用没有任何校验能拦。** `loraforge/configs/problems.py` 的 `_resolve_arch_hint`（`:343-352`）只看家族子串——MOSS 判 `"moss-image" in name`，Krea2 判 `name.startswith("krea/") or "krea-2" in name`：
+
+- `OpenMOSS-Team/MOSS-Image-SFT` → 小写含 `moss-image` → **通过**（但它是出图侧，官方建议用 Base 训 LoRA）
+- `krea/Krea-2-Turbo` → 以 `krea/` 开头 → **通过**（但官方是 TRAIN on Raw、RUN on Turbo）
+- 反过来 `moss_image_base.safetensors`（下划线）→ 不含 `moss-image` → **误杀**（review #11 已记）
+
+`model.family-mismatch`（`:421-427`）只查家族，所以「用户照 ai-toolkit registry 预填 `moss_image`」会拿到 SFT，一路通过。
+
+**建议：新增一条 `model.train-variant`，级别 `warn`（不要 `error`）。** 理由：kohya README 明确对 Base 与 SFT 都支持 LoRA（`:47,67`），训 SFT 不必然失败，只是偏离官方推荐；判 error 会变成假阳性。
+
+| 项 | 建议 |
+|---|---|
+| code | `model.train-variant` |
+| 触发 | `target == MOSS` 且小写 `name_or_path` 含 `sft`；或 `target == KREA2` 且含 `turbo` |
+| 级别 | `warn` |
+| message（MOSS） | `model.name_or_path 指向 MOSS-Image-SFT；官方建议用 MOSS-Image-Base 训练 LoRA（SFT 是出图侧）。见 USERGUIDE 第 5 节` |
+| message（Krea2） | `model.name_or_path 指向 Krea-2-Turbo；官方口径是 TRAIN on Raw、RUN on Turbo` |
+| 顺带修 | `_resolve_arch_hint` 先把 `name` 里的 `_` 和 `.` 归一成 `-` 再匹配，修掉 `moss_image_base.safetensors` 的误杀 |
+
+依据：`OpenMOSS/MOSS-Image USERGUIDE.md:5`（Base 就是给社区训 LoRA 的）、`README.md:143`（SFT 由 Base 微调）；`krea-ai/krea-2 README:22,24,110`（TRAIN on Raw / RUN on Turbo）；`loraforge/configs/problems.py:343-352,421-427`；kohya `docs/moss_image_train_network.md` 对两者的支持表述。
+
+这条与 §五 的「MOSS `name_or_path` 必须 Base」是同一件事：§五 是默认值，本条是校验层。
 
 ## 出处
 
