@@ -67,6 +67,31 @@ def test_run_batch_writes_txt_and_reports(images: list[Path]) -> None:
     assert [row[2] for row in seen] == images
 
 
+def test_written_txt_is_plain_lf_without_bom(images: list[Path]) -> None:
+    """训练用的 .txt 必须逐字节是 LF：Windows 文本模式会把 ``\\n`` 写成 ``\\r\\n``。
+
+    只断言字符串相等抓不到这个 bug——文本模式读回来时 CRLF 又会被折成 ``\\n``，
+    所以这里一律按字节断言。
+    """
+    run_batch(images, ctx(trigger="MyTok"), FakeBackend())
+
+    for image in images:
+        path = image.with_suffix(".txt")
+        data = path.read_bytes()
+        assert not data.startswith(b"\xef\xbb\xbf"), f"{path.name} 带 UTF-8 BOM"
+        assert b"\r" not in data, f"{path.name} 写出的打标文件里混进了 CR"
+        assert data.endswith(b"\n"), f"{path.name} 末尾缺单个换行"
+        assert not data.endswith(b"\r\n")
+        assert data.count(b"\n") == 1, f"{path.name} 单行打标词应只有一个换行"
+
+    # overwrite 重写一遍也必须还是纯 LF
+    run_batch(images, ctx(trigger="MyTok"), FakeBackend(), overwrite=True)
+    for image in images:
+        data = image.with_suffix(".txt").read_bytes()
+        assert b"\r" not in data, f"{image.name} 重写后又出现了 CR"
+        assert data.endswith(b"\n") and not data.endswith(b"\r\n")
+
+
 def test_overwrite_false_skips_existing_and_true_rewrites(images: list[Path]) -> None:
     run_batch(images, ctx(), FakeBackend())
 
