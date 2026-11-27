@@ -30,3 +30,7 @@ Thumbs.db
 
 # 上游源码副本（调研用，不入仓）
 _src/
+
+# 本地模型权重（WD tagger 等，体积大、可再下载）
+models/
+*.onnx
