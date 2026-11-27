@@ -276,6 +276,43 @@ def check_captions(
 
 标红/标黄对应 `severity`：`error` → 红，`warn` → 黄，`info` → 正常。
 
+### 7.3 整批体检（`loraforge/caption/dataset.py`）
+
+`check_captions()` 回答「这一张有什么问题」；**整批才看得出的问题不许按张重复报**。
+86 张图整批同一个黄字刷 86 遍，用户会学会无视黄字——这是已验证的真实事故。
+
+```python
+# loraforge/caption/dataset.py
+DatasetCode = Literal["alpha_channel", "ubiquitous_tag", "small_resolution"]
+
+@dataclass(frozen=True)
+class DatasetIssue:
+    code: DatasetCode
+    severity: Severity
+    message: str                 # 中文，含数量与样例文件名
+    files: tuple[str, ...]       # 受影响文件名，最多 sample 个
+
+def analyze_dataset(
+    pairs: Sequence[tuple[Path, str]], ctx: CaptionContext,
+    *, threshold: float = 0.8, sample: int = 20,
+) -> list[DatasetIssue]:
+```
+
+- `alpha_channel`（warn）：存在带真透明通道的图（`alpha.getextrema()[0] == 0`）。
+  ai-toolkit 会把 RGBA 读成 RGB 并自己猜底色，透明区可能变黑也可能变白；建议先合成到纯色底。
+- `ubiquitous_tag`（warn）：某个标签出现在 **> threshold** 比例的**非空**打标词里，且张数 ≥ 5。
+  一条 issue 列出全部这类标签。语义是「这批图太同质」或「这个词该进采样 prompt 而不是标签」。
+- `small_resolution`（warn）：短边 < 512 的图。低于训练桶下限会被放大，细节不可追。
+
+规则：
+
+1. **每种 code 最多一条**，不许按图展开；`files` 给样例，数量写进 `message`。
+2. `check_captions()` 的 `duplicate` 从此**只表示「这些图的打标词一字不差」**，
+   不再承担「某个词出现在太多图上」——那是 `ubiquitous_tag` 的事。
+3. 界面把 `analyze_dataset()` 的结果**单独一栏显示一次**（在逐图列表上方），
+   不进逐图列表。逐图列表只显示 `check_captions()` 的结果。
+4. 空打标词不进 `ubiquitous_tag` 的统计分母，也不算进 alpha/resolution 的判定。
+
 ---
 
 ## 8. 配置侧的读口（`loraforge/configs/plans.py`）
