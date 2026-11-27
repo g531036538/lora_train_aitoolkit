@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 from pathlib import Path
 
@@ -878,3 +879,32 @@ def test_render_acceptance_is_deterministic() -> None:
         assert 50 <= first.count("\n") + 1 <= 80
         assert "\r\n" not in first
 
+
+
+def test_local_weights_path_is_only_a_warning() -> None:
+    """``name_or_path`` 指向本地权重文件时 warn：权重不随 zip 上传，训练机上取不到。
+
+    判定不许误伤 HF repo id（三个默认配置都是 repo id，必须只剩 ``resolution-parallel``）。
+    """
+    local_names = [
+        r"C:\Users\someone\weights\stable-diffusion-xl-base-1.0.safetensors",
+        "/home/someone/weights/stable-diffusion-xl-base-1.0.safetensors",
+        "checkpoints/stable-diffusion-xl-base-1.0.safetensors",
+    ]
+    for name in local_names:
+        plan = dataclasses.replace(default_plan(TargetModel.SDXL), model_path=name)
+        cfg = build_config(TargetModel.SDXL, plan)
+        codes = _warn_codes(cfg, TargetModel.SDXL)
+        assert "model.local-weights-path" in codes, (name, codes)
+        assert validate_config(cfg, TargetModel.SDXL) == []
+
+    # repo id 不触发
+    for target in TargetModel:
+        cfg = build_config(target, default_plan(target))
+        codes = _warn_codes(cfg, target)
+        assert codes == {"datasets.resolution-parallel"}, (target, codes)
+
+
+def test_known_codes_covers_local_weights_path() -> None:
+    """新 code 必须登记进 registry，否则 ``_problem`` 会 KeyError。"""
+    assert known_codes()["model.local-weights-path"] == "warn"

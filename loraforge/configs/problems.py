@@ -145,6 +145,12 @@ _REGISTRY: dict[str, tuple[Severity, str]] = {
         "toolkit/config_modules.py:809-831：arch 不匹配会落回 sd1，整条训练路径全错；"
         "但 is_xl: true 可以推出 sdxl，两者都缺才拦",
     ),
+    "model.local-weights-path": (
+        "warn",
+        # 权重不随 zip 上传：绝对路径在训练机上必然取不到，但用户也可能只是本机试跑，
+        # 而且「以 .safetensors 结尾的非 repo id」这种判定有启发式成分，判 error 会误拦。
+        "name_or_path 指向本地权重文件；训练机上取不到，需要用户自己上传并在那边改路径",
+    ),
     "model.arch-suffix": (
         "warn",
         # [review #12] config_modules.py:776-778 是通用逻辑，krea2:raw、sdxl:foo 的 tag
@@ -378,6 +384,21 @@ def _resolve_arch_hint(target: TargetModel, model: dict[str, Any]) -> bool:
     return any("moss-image" in s for s in (raw, name))
 
 
+def _is_local_weights_path(name_or_path: str) -> bool:
+    """``model.name_or_path`` 看起来是指向本地权重文件，而不是 HF repo id。
+
+    三种形态：带盘符的绝对路径、以 ``/`` 或 ``\\`` 开头的绝对路径；以及以
+    ``.safetensors`` 结尾的名字。HF repo id 是 ``org/name`` 形态，不含盘符、不以
+    斜杠开头，也不会以 ``.safetensors`` 结尾，所以这条不会误伤默认配置。
+    """
+    raw = name_or_path.strip()
+    if not raw:
+        return False
+    if re.match(r"^[A-Za-z]:[\\/]", raw) or raw.startswith(("/", "\\\\")):
+        return True
+    return raw.lower().endswith(".safetensors")
+
+
 def _positive(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
@@ -446,6 +467,15 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
                 "model.family-mismatch",
                 f"model.name_or_path 与 target={t.value} 不匹配："
                 f"{model.get('name_or_path')!r}，应使用 {PROFILES[t].train_base}",
+            )
+        )
+    # 独立判断，不走上面的 elif 链：家族看起来也不对时，两条警告都该出现。
+    if _is_local_weights_path(str(model.get("name_or_path") or "")):
+        problems.append(
+            _problem(
+                "model.local-weights-path",
+                "model.name_or_path 指向本地权重文件，而权重文件不随 zip 上传，"
+                "训练机上取不到；改用 HF repo id，或在训练机上放好权重再改这个路径",
             )
         )
 
