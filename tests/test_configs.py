@@ -22,6 +22,7 @@ from loraforge.configs import (
     known_codes,
     krea2_mu,
     plan_for_tier,
+    render_acceptance_markdown,
     tier_for_vram,
     validate_config,
     validate_config_detailed,
@@ -812,3 +813,68 @@ def test_acceptance_data_is_structured() -> None:
 def test_krea2_mu_follows_the_scheduler_formula() -> None:
     assert krea2_mu((1024 // 16) ** 2) == 0.90625
     assert krea2_mu((512 // 16) ** 2) == 0.58125
+
+
+# --- render_acceptance_markdown：把验收数据渲染成用户可读的 验收.md ----------------
+
+
+def test_render_acceptance_has_model_trigger_and_sections() -> None:
+    expected = {
+        TargetModel.SDXL: "SDXL",
+        TargetModel.KREA2: "Krea 2",
+        TargetModel.MOSS: "MOSS-Image",
+    }
+    for target in TARGETS:
+        plan = default_plan(target)
+        text = render_acceptance_markdown(target, plan)
+        assert text.startswith(f"# {expected[target]} LoRA 验收清单")
+        assert f"`{plan.trigger}`" in text
+        assert "## 0. 出图用哪个模型" in text
+        assert "## 1. 采样参数" in text
+        assert "## 2. 三提示法" in text
+        assert "## 3. 判定口径" in text
+
+
+def test_render_acceptance_shows_effective_values_per_model() -> None:
+    # Krea2：yaml 里写 guidance 5.5，生效是 4.5（krea2.py:455 减 1）；步数 52
+    krea2 = render_acceptance_markdown(TargetModel.KREA2, default_plan(TargetModel.KREA2))
+    krea2_rows = {
+        line.split("|")[1].strip(): line for line in krea2.splitlines() if line.startswith("| ")
+    }
+    assert "5.5" in krea2_rows["CFG"] and "4.5" in krea2_rows["CFG"]
+    assert "52" in krea2_rows["步数"]
+    assert "mu" in krea2_rows and "0.90625" in krea2_rows["mu"]
+
+    # SDXL：不适用要带原因，不能只写「不适用」
+    sdxl = render_acceptance_markdown(TargetModel.SDXL, default_plan(TargetModel.SDXL))
+    assert "不适用（SDXL 不是 flow matching，没有 timestep 类型）" in sdxl
+    assert "| timestep_type | 不适用 |" not in sdxl
+
+    # MOSS：固定 shift 5.0，采样 50 步
+    moss = render_acceptance_markdown(TargetModel.MOSS, default_plan(TargetModel.MOSS))
+    moss_rows = {
+        line.split("|")[1].strip(): line for line in moss.splitlines() if line.startswith("| ")
+    }
+    assert "50" in moss_rows["步数"]
+    assert "5.0" in moss_rows["shift"]
+
+
+def test_render_acceptance_fills_trigger_into_prompts() -> None:
+    for target in TARGETS:
+        plan = default_plan(target)
+        text = render_acceptance_markdown(target, plan)
+        assert "[trigger]" not in text
+        for prompt in plan.sample_prompts:
+            assert prompt.replace("[trigger]", plan.trigger) in text
+
+
+def test_render_acceptance_is_deterministic() -> None:
+    for target in TARGETS:
+        plan = default_plan(target)
+        first = render_acceptance_markdown(target, plan)
+        second = render_acceptance_markdown(target, plan)
+        assert first == second
+        # 三模型实测都是 65 行，±15 收紧到 50–80，防止有人往里堆无关内容。
+        assert 50 <= first.count("\n") + 1 <= 80
+        assert "\r\n" not in first
+

@@ -578,9 +578,10 @@ def validate_config_detailed(cfg: dict, target: TargetModel | str) -> list[Confi
                 "model.quantize-with-offloading",
                 "model.quantize/quantize_te 与 layer_offloading（旧名 auto_memory）"
                 "同时开启：已有报告称 INT8 量化 + 100% layer offloading 会让训练正常"
-                "但导出的 LoRA 推理无效（ai-toolkit issue #1057），且 layer_offloading "
-                "为真时 qfloat8 会被静默改写成 float8（toolkit/config_modules.py:724-727）。"
-                "24 GB 省显存建议只开一个",
+                "但导出的 LoRA 推理无效（ai-toolkit issue #1057；已知案例是 qfloat8，"
+                "convrot8 未验证），且 layer_offloading 为真时 qfloat8 会被静默改写成 "
+                "float8（toolkit/config_modules.py:724-727）。省显存只开量化 / "
+                "只开 offloading，二选一",
             )
         )
 

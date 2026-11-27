@@ -4,6 +4,7 @@
 * :func:`validate_config_detailed` / :class:`ConfigProblem` —— 带 error/warn 分级
 * :func:`default_plan` / :data:`VRAM_TIERS` —— §8 读口
 * :func:`acceptance_plan` —— 训练后验收（采样参数 + 三提示法）
+* :func:`render_acceptance_markdown` —— 把验收数据渲染成用户可读的 `验收.md`
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from loraforge.configs.acceptance import (
     acceptance_dict,
     acceptance_plan,
     krea2_mu,
+    render_acceptance_markdown,
 )
 from loraforge.configs.base import TrainingPlan, build_config, validate_config
 from loraforge.configs.plans import (
@@ -56,4 +58,5 @@ __all__ = [
     "acceptance_plan",
     "acceptance_dict",
     "krea2_mu",
+    "render_acceptance_markdown",
 ]
