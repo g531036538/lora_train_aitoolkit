@@ -15,6 +15,7 @@ import app.main as ui
 from loraforge.caption.base import BackendCaps
 from loraforge.caption.pipeline import BackendInfo
 from loraforge.models import PROFILES
+from loraforge.testing import FakeBackend
 
 CLIENT = TestClient(ui.app)
 
@@ -169,3 +170,204 @@ def test_export_bad_params_are_4xx_never_500(scratch: Path) -> None:
         assert 400 <= response.status_code < 500, f"{name} 返回了 {response.status_code}"
         assert response.json()["errors"], f"{name} 没给原因"
     assert not (scratch / "out.zip").exists()           # 一条都不该写出成品
+
+
+# ---------------------------------------------------------------------------
+# PR-B1：图集清点 + 打标跑批
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_backend_cache():
+    """每个用例前后清掉后端实例缓存，避免用例之间互相复用假后端。"""
+    ui._forget_backends()
+    yield
+    ui._forget_backends()
+
+
+def _dataset_with_images(scratch: Path, names: tuple[str, ...], with_caption=()) -> Path:
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    for name in names:
+        (dataset / name).write_bytes(b"\x89PNG\r\n\x1a\n")
+    for name in with_caption:
+        (dataset / name).write_text("mytoken, a photo of a person\n", encoding="utf-8")
+    return dataset
+
+
+def test_scan_lists_images_and_reports_skipped(scratch: Path) -> None:
+    dataset = _dataset_with_images(
+        scratch, ("a.png", "b.JPG", "c.jpeg", "d.webp"), with_caption=("a.txt",)
+    )
+    (dataset / "notes.txt").write_text("x\n", encoding="utf-8")
+    (dataset / "sub").mkdir()
+
+    response = CLIENT.post("/scan", data={"dataset_dir": str(dataset)})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["count"] == 3                                  # d.webp 不算训练图
+    names = [item["name"] for item in payload["images"]]
+    assert names == ["a.png", "b.JPG", "c.jpeg"]                   # 后缀大小写不敏感
+    assert [item["has_caption"] for item in payload["images"]] == [True, False, False]
+    assert payload["with_caption"] == 1
+    skipped = set(payload["skipped"]["names"])
+    assert {"d.webp", "notes.txt", "sub"} <= skipped                # 跳过的必须点名
+    assert payload["skipped"]["count"] == len(skipped)
+
+
+def test_scan_rejects_missing_dir(scratch: Path) -> None:
+    response = CLIENT.post("/scan", data={"dataset_dir": str(scratch / "nope")})
+    assert response.status_code == 400
+    assert "图集目录不存在" in response.json()["errors"][0]
+
+
+def test_caption_writes_txt_and_reports_counts(scratch: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dataset = _dataset_with_images(scratch, ("frame_01.png", "frame_02.png", "frame_03.png"))
+    monkeypatch.setattr(ui, "get_backend", lambda key: FakeBackend())
+
+    response = CLIENT.post(
+        "/caption",
+        data={
+            "dataset_dir": str(dataset),
+            "model": "sdxl",
+            "kind": "character",
+            "trigger": "mytoken",
+            "backend": "wd_tagger",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert (payload["written"], payload["failed"], payload["skipped"]) == (3, 0, 0)
+    assert payload["ok"] is True
+    assert all(item["status"] == "written" for item in payload["items"])
+    for name in ("frame_01.txt", "frame_02.txt", "frame_03.txt"):
+        text = (dataset / name).read_text(encoding="utf-8")
+        assert text.strip().startswith("mytoken")        # 触发词被 styler 注进第一位
+
+
+def test_caption_reports_failed_item_with_backend_reason(
+    scratch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = _dataset_with_images(scratch, ("frame_01.png", "frame_02.png"))
+    monkeypatch.setattr(ui, "get_backend", lambda key: FakeBackend(fail_on={"frame_02"}))
+
+    response = CLIENT.post(
+        "/caption",
+        data={"dataset_dir": str(dataset), "model": "moss_image", "kind": "style", "backend": "wd_tagger"},
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert (payload["written"], payload["failed"]) == (1, 1)
+    assert payload["ok"] is False
+    failed = payload["failed_items"]
+    assert [item["image"] for item in failed] == ["frame_02.png"]
+    assert failed[0]["error"] == "fake backend 故意失败：frame_02"  # reason 原文，不摘要
+    assert failed[0]["retryable"] is True
+    status_by_name = {item["image"]: item["status"] for item in payload["items"]}
+    assert status_by_name == {"frame_01.png": "written", "frame_02.png": "failed"}
+
+
+def test_caption_retry_reruns_only_selected_images(
+    scratch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = _dataset_with_images(scratch, ("frame_01.png", "frame_02.png", "frame_03.png"))
+    monkeypatch.setattr(ui, "get_backend", lambda key: FakeBackend(fail_on={"frame_02"}))
+
+    first = CLIENT.post(
+        "/caption",
+        data={"dataset_dir": str(dataset), "model": "sdxl", "kind": "character", "backend": "wd_tagger"},
+    ).json()
+    assert first["failed"] == 1
+
+    monkeypatch.setattr(ui, "get_backend", lambda key: FakeBackend())
+    ui._forget_backends()                                          # 等价于用户换了后端/权重
+    retry = CLIENT.post(
+        "/caption",
+        data={
+            "dataset_dir": str(dataset),
+            "model": "sdxl",
+            "kind": "character",
+            "backend": "wd_tagger",
+            "images": "frame_02.png",
+        },
+    ).json()
+
+    assert retry["total"] == 1                                     # 只跑失败那张
+    assert retry["written"] == 1 and retry["failed"] == 0
+    assert (dataset / "frame_02.txt").is_file()
+
+
+def test_caption_reuses_backend_instance_across_requests(
+    scratch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = _dataset_with_images(scratch, ("frame_01.png",))
+    calls: list[str] = []
+
+    def counting(key: str):
+        calls.append(key)
+        return FakeBackend()
+
+    monkeypatch.setattr(ui, "get_backend", counting)
+
+    for _ in range(3):
+        CLIENT.post(
+            "/caption",
+            data={"dataset_dir": str(dataset), "model": "sdxl", "kind": "character", "backend": "wd_tagger"},
+        )
+
+    assert calls == ["wd_tagger"]                                   # 只建一次后端
+
+
+def test_caption_rejects_unavailable_backend_with_reason(
+    scratch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = _dataset_with_images(scratch, ("frame_01.png",))
+
+    def broken(key: str):
+        raise RuntimeError("缺少 onnxruntime；无法运行 WD tagger")
+
+    monkeypatch.setattr(ui, "get_backend", broken)
+
+    response = CLIENT.post(
+        "/caption",
+        data={"dataset_dir": str(dataset), "model": "sdxl", "kind": "character", "backend": "wd_tagger"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["stage"] == "后端"
+    assert "缺少 onnxruntime" in response.json()["errors"][0]
+
+
+def test_index_has_caption_section() -> None:
+    page = CLIENT.get("/").text
+    assert "图集与打标" in page
+    assert 'id="scan-form"' in page
+    assert 'id="caption-form"' in page
+    assert "已跳过" in page
+
+
+def test_caption_skips_existing_caption_when_overwrite_off(
+    scratch: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = _dataset_with_images(scratch, ("frame_01.png", "frame_02.png"), with_caption=("frame_01.txt",))
+    monkeypatch.setattr(ui, "get_backend", lambda key: FakeBackend())
+
+    payload = CLIENT.post(
+        "/caption",
+        data={
+            "dataset_dir": str(dataset),
+            "model": "sdxl",
+            "kind": "character",
+            "trigger": "mytoken",
+            "backend": "wd_tagger",
+            "overwrite": "0",
+        },
+    ).json()
+
+    assert (payload["written"], payload["skipped"], payload["failed"]) == (1, 1, 0)
+    status = {item["image"]: item["status"] for item in payload["items"]}
+    assert status == {"frame_01.png": "skipped", "frame_02.png": "written"}
+    assert (dataset / "frame_01.txt").read_text(encoding="utf-8").strip() == "mytoken, a photo of a person"

@@ -54,6 +54,11 @@
   .pill-list li { font-family: ui-monospace, Consolas, monospace; font-size: 12px;
                   border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--muted); }
   .empty { color: var(--muted); font-size: 13px; }
+  .sep { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+  .bad-list { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  .bad-list li { border: 1px solid #5a2a2a; border-radius: 6px; padding: 6px 10px; font-size: 12.5px; }
+  .bad-list li b { font-family: ui-monospace, Consolas, monospace; }
+  .bad-list li span { display: block; color: #ffb3b3; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -141,6 +146,65 @@
     </table>
   </section>
 
+  <section aria-labelledby="caption-title">
+    <h2 id="caption-title">图集与打标</h2>
+    <p class="hint">先清点目录，再跑一遍打标。只认 <code>.jpg/.jpeg/.png</code>（大小写不敏感）；目录里其他文件会逐个列进「已跳过」，不静默丢。失败的图单独列出、带后端原始原因，可只重跑它们。</p>
+
+    <form class="export" id="scan-form">
+      <div>
+        <label for="scan_dir">图集目录（本机绝对路径）</label>
+        <input type="text" id="scan_dir" name="dataset_dir" placeholder="D:\datasets\my_character" required>
+      </div>
+      <div class="actions">
+        <button type="submit" id="scan-btn">清点目录</button>
+        <span class="hint" style="margin:0">不写任何文件</span>
+      </div>
+      <div id="scan-result" role="status" aria-live="polite"></div>
+    </form>
+
+    <hr class="sep">
+
+    <form class="export" id="caption-form">
+      <div>
+        <label for="cap_dir">图集目录</label>
+        <input type="text" id="cap_dir" name="dataset_dir" placeholder="与上面同一个目录" required>
+      </div>
+      <div>
+        <label for="cap_model">目标模型</label>
+        <select id="cap_model" name="model">
+          {% for m in models %}<option value="{{ m.key }}">{{ m.label }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="cap_kind">数据集类型</label>
+        <select id="cap_kind" name="kind">
+          {% for kind in kinds %}<option value="{{ kind }}">{{ kind }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="cap_trigger">触发词</label>
+        <input type="text" id="cap_trigger" name="trigger" placeholder="mytoken">
+      </div>
+      <div>
+        <label for="cap_backend">打标后端</label>
+        <select id="cap_backend" name="backend">
+          {% for b in backends %}
+          <option value="{{ b.key }}"{{ ' disabled' if not b.available else '' }}>{{ b.label }}{% if not b.available %}（不可用）{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="check">
+        <input type="checkbox" id="cap_overwrite" name="overwrite" value="1" checked>
+        <label for="cap_overwrite" style="margin:0">覆盖已有 .txt（不勾则跳过已有标注）</label>
+      </div>
+      <div class="actions">
+        <button type="submit" id="cap-btn">开始打标</button>
+        <span class="hint" style="margin:0">单张失败不中断整批</span>
+      </div>
+      <div id="caption-result" role="status" aria-live="polite"></div>
+    </form>
+  </section>
+
   <section aria-labelledby="export-title">
     <h2 id="export-title">导出</h2>
     <p class="hint">按表单参数生成 yaml → <code>validate_config</code> 有硬错就拒绝 → <code>package()</code> 打包；缺打标词与孤儿 txt 会在结果里逐条列出。</p>
@@ -188,10 +252,6 @@
 
 <script>
 (function () {
-  var form = document.getElementById("export-form");
-  var out = document.getElementById("result");
-  var btn = document.getElementById("submit-btn");
-
   function line(label, value, color) {
     var p = document.createElement("div");
     p.textContent = label + "：" + value;
@@ -210,35 +270,183 @@
     return box;
   }
 
-  form.addEventListener("submit", function (event) {
+  function post(url, body) {
+    return fetch(url, { method: "POST", body: body }).then(function (resp) {
+      return resp.json().then(function (data) { return { status: resp.status, data: data }; });
+    });
+  }
+
+  function failures(title, errors) {
+    var box = document.createElement("div");
+    box.appendChild(line(title, "", "#ff6b6b"));
+    var ul = document.createElement("ul");
+    ul.className = "bad-list";
+    errors.forEach(function (text) {
+      var li = document.createElement("li");
+      li.textContent = text;
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    return box;
+  }
+
+  function table(headers, rows) {
+    var el = document.createElement("table");
+    var thead = document.createElement("thead");
+    var hr = document.createElement("tr");
+    headers.forEach(function (h) { var th = document.createElement("th"); th.textContent = h; hr.appendChild(th); });
+    thead.appendChild(hr);
+    el.appendChild(thead);
+    var tbody = document.createElement("tbody");
+    rows.forEach(function (cells) {
+      var tr = document.createElement("tr");
+      cells.forEach(function (value, index) {
+        var td = document.createElement("td");
+        td.textContent = value;
+        if (index === 0) { td.className = "mono"; }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    el.appendChild(tbody);
+    return el;
+  }
+
+  // ---- 目录清点 ----------------------------------------------------------
+  document.getElementById("scan-form").addEventListener("submit", function (event) {
     event.preventDefault();
-    var body = new FormData(form);
-    if (!body.get("include_images")) { body.set("include_images", "0"); }
+    var btn = document.getElementById("scan-btn");
+    var out = document.getElementById("scan-result");
+    var body = new FormData(event.target);
     btn.disabled = true;
-    out.textContent = "导出中…";
-    fetch("/export", { method: "POST", body: body })
-      .then(function (resp) { return resp.json().then(function (data) { return { status: resp.status, data: data }; }); })
+    out.textContent = "清点中…";
+    post("/scan", body)
       .then(function (res) {
         var data = res.data;
         out.textContent = "";
-        if (!data.ok && data.errors) {
-          out.appendChild(line("导出被拒绝（" + data.stage + "）", "", "#ff6b6b"));
-          out.appendChild(list("问题", data.errors, "#ff6b6b"));
-          return;
+        if (data.errors) { out.appendChild(failures("清点被拒绝（" + data.stage + "）", data.errors)); return; }
+        out.appendChild(line("目录", data.root));
+        out.appendChild(line("训练图 / 已有标注", data.count + " / " + data.with_caption,
+                             data.count === data.with_caption ? "#3ddc97" : "#ffc75f"));
+        if (data.warning) { out.appendChild(line("提示", data.warning, "#ffc75f")); }
+        if (data.images.length) {
+          out.appendChild(table(["文件", "大小（字节）", "已有 .txt"], data.images.map(function (item) {
+            return [item.name, String(item.size), item.has_caption ? "有" : "无"];
+          })));
         }
-        var head = data.ok ? "导出完成" : "已打包，但有问题需要处理";
-        out.appendChild(line(head, data.zip, data.ok ? "#3ddc97" : "#ffc75f"));
-        out.appendChild(line("图片 / 打标", data.images + " / " + data.captions));
-        if (data.missing_caption.length) { out.appendChild(list("缺打标词的图", data.missing_caption, "#ff6b6b")); }
-        if (data.orphan_caption.length) { out.appendChild(list("没有对应图的 txt", data.orphan_caption, "#ffc75f")); }
-        if (data.ambiguous && data.ambiguous.length) { out.appendChild(list("同名冲突", data.ambiguous, "#ff6b6b")); }
+        if (data.skipped.count) {
+          out.appendChild(line("已跳过（非 .jpg/.jpeg/.png）", String(data.skipped.count), "#ffc75f"));
+          var pre = document.createElement("pre");
+          pre.textContent = data.skipped.names.join("\n");
+          out.appendChild(pre);
+        }
       })
-      .catch(function (err) {
-        out.textContent = "";
-        out.appendChild(line("请求失败", String(err), "#ff6b6b"));
-      })
+      .catch(function (err) { out.textContent = ""; out.appendChild(line("请求失败", String(err), "#ff6b6b")); })
       .then(function () { btn.disabled = false; });
   });
+
+  // ---- 打标 --------------------------------------------------------------
+  document.getElementById("caption-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var form = event.target;
+    var btn = document.getElementById("cap-btn");
+    var out = document.getElementById("caption-result");
+    var body = new FormData(form);
+    if (!body.get("overwrite")) { body.set("overwrite", "0"); }
+    btn.disabled = true;
+    out.textContent = "打标中…（本地 WD tagger 首次要建 session，约 2 s）";
+    post("/caption", body)
+      .then(function (res) {
+        var data = res.data;
+        out.textContent = "";
+        if (data.errors) { out.appendChild(failures("打标被拒绝（" + data.stage + "）", data.errors)); return; }
+        out.appendChild(line("后端", data.backend));
+        out.appendChild(line("写入 / 失败 / 跳过",
+                             data.written + " / " + data.failed + " / " + data.skipped,
+                             data.failed === 0 ? "#3ddc97" : "#ff6b6b"));
+        if (data.failed_items.length) {
+          var box = document.createElement("div");
+          box.appendChild(line("失败的图（原因原样来自后端，不是摘要）", String(data.failed_items.length), "#ff6b6b"));
+          var ul = document.createElement("ul");
+          ul.className = "bad-list";
+          data.failed_items.forEach(function (item) {
+            var li = document.createElement("li");
+            var name = document.createElement("b");
+            name.textContent = item.image;
+            var reason = document.createElement("span");
+            reason.textContent = item.error;
+            li.appendChild(name);
+            li.appendChild(reason);
+            ul.appendChild(li);
+          });
+          box.appendChild(ul);
+          var retry = document.createElement("button");
+          retry.type = "button";
+          retry.textContent = "只重跑这 " + data.failed_items.length + " 张";
+          retry.addEventListener("click", function () {
+            var retryBody = new FormData(form);
+            if (!retryBody.get("overwrite")) { retryBody.set("overwrite", "0"); }
+            retryBody.set("images", data.failed_items.map(function (item) { return item.image; }).join("\n"));
+            retry.disabled = true;
+            out.textContent = "重跑中…";
+            post("/caption", retryBody)
+              .then(function (again) {
+                var d = again.data;
+                out.textContent = "";
+                if (d.errors) { out.appendChild(failures("重跑被拒绝（" + d.stage + "）", d.errors)); return; }
+                out.appendChild(line("重跑结果 · 写入 / 失败",
+                                     d.written + " / " + d.failed, d.failed === 0 ? "#3ddc97" : "#ff6b6b"));
+                if (d.failed_items.length) {
+                  out.appendChild(failures("仍然失败的图", d.failed_items.map(function (item) {
+                    return item.image + " — " + item.error;
+                  })));
+                }
+              })
+              .catch(function (err) { out.textContent = ""; out.appendChild(line("请求失败", String(err), "#ff6b6b")); });
+          });
+          box.appendChild(retry);
+          out.appendChild(box);
+        }
+      })
+      .catch(function (err) { out.textContent = ""; out.appendChild(line("请求失败", String(err), "#ff6b6b")); })
+      .then(function () { btn.disabled = false; });
+  });
+
+  // ---- 导出 --------------------------------------------------------------
+  (function () {
+    var form = document.getElementById("export-form");
+    var out = document.getElementById("result");
+    var btn = document.getElementById("submit-btn");
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var body = new FormData(form);
+      if (!body.get("include_images")) { body.set("include_images", "0"); }
+      btn.disabled = true;
+      out.textContent = "导出中…";
+      post("/export", body)
+        .then(function (res) {
+          var data = res.data;
+          out.textContent = "";
+          if (!data.ok && data.errors) {
+            out.appendChild(line("导出被拒绝（" + data.stage + "）", "", "#ff6b6b"));
+            out.appendChild(list("问题", data.errors, "#ff6b6b"));
+            return;
+          }
+          var head = data.ok ? "导出完成" : "已打包，但有问题需要处理";
+          out.appendChild(line(head, data.zip, data.ok ? "#3ddc97" : "#ffc75f"));
+          out.appendChild(line("图片 / 打标", data.images + " / " + data.captions));
+          if (data.missing_caption.length) { out.appendChild(list("缺打标词的图", data.missing_caption, "#ff6b6b")); }
+          if (data.orphan_caption.length) { out.appendChild(list("没有对应图的 txt", data.orphan_caption, "#ffc75f")); }
+          if (data.ambiguous && data.ambiguous.length) { out.appendChild(list("同名冲突", data.ambiguous, "#ff6b6b")); }
+        })
+        .catch(function (err) {
+          out.textContent = "";
+          out.appendChild(line("请求失败", String(err), "#ff6b6b"));
+        })
+        .then(function () { btn.disabled = false; });
+    });
+  })();
 })();
 </script>
 </body>

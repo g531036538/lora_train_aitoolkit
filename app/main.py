@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,8 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from loraforge.caption.pipeline import BackendInfo, list_backends
+from loraforge.caption.base import CaptionBackend, CaptionContext
+from loraforge.caption.pipeline import BackendInfo, get_backend, list_backends, run_batch
 from loraforge.caption.reasons import human_reason
 from loraforge.configs import (
     VRAM_TIERS,
@@ -24,7 +26,7 @@ from loraforge.configs import (
     plan_for_tier,
     validate_config,
 )
-from loraforge.export import ExportError, package
+from loraforge.export import ExportError, package, scan_images
 from loraforge.models import PROFILES, DatasetKind, TargetModel
 
 APP_DIR = Path(__file__).resolve().parent
@@ -102,6 +104,48 @@ def _fail(stage: str, errors: list[str]) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# 打标后端实例：取一次，整批复用
+# ---------------------------------------------------------------------------
+
+_BACKEND_LOCK = threading.Lock()
+#: ``key -> 后端实例``。wd_tagger 首次建 session 约 2 s，之后 0.78 s/张；
+#: 每张图重新 ``get_backend`` 会把这 2 s 反复付一遍。
+_BACKEND_CACHE: dict[str, CaptionBackend] = {}
+
+
+def _caption_backend(key: str) -> CaptionBackend:
+    """按 key 取后端（带缓存）。未知 key 抛 ``KeyError``，不可用抛 ``RuntimeError``。"""
+    normalized = str(key).strip().lower() or "wd_tagger"
+    with _BACKEND_LOCK:
+        backend = _BACKEND_CACHE.get(normalized)
+        if backend is None:
+            backend = get_backend(normalized)
+            _BACKEND_CACHE[normalized] = backend
+        return backend
+
+
+def _forget_backends() -> None:
+    """清掉后端缓存：换模型 / 权重换新后调用。"""
+    with _BACKEND_LOCK:
+        _BACKEND_CACHE.clear()
+
+
+def _wanted_images(raw: str, available: list[str]) -> list[str]:
+    """``images`` 字段（换行或逗号分隔）→ 要跑的图名。空 = 全部。
+
+    只重跑失败的几张就靠它：前端把失败图名回填进来。
+    """
+    names = [part.strip() for part in raw.replace("\r", "\n").replace(",", "\n").split("\n")]
+    chosen = [name for name in names if name]
+    if not chosen:
+        return list(available)
+    unknown = [name for name in chosen if name not in available]
+    if unknown:
+        raise ValueError(f"目录里没有这些图：{', '.join(unknown)}")
+    return chosen
+
+
+# ---------------------------------------------------------------------------
 # 路由
 # ---------------------------------------------------------------------------
 
@@ -129,6 +173,147 @@ def healthz() -> dict[str, Any]:
         "models": [target.value for target in PROFILES],
         "backends": [info.key for info in _backends()],
     }
+
+
+@app.post("/scan")
+def scan(dataset_dir: str = Form(...)) -> JSONResponse:
+    """清点图集：哪些是训练图、哪张已有 .txt、哪些文件被跳过。"""
+    raw = dataset_dir.strip()
+    if not raw:
+        return _fail("参数", ["图集目录不能为空"])
+    try:
+        result = scan_images(Path(raw).expanduser())
+    except ExportError as exc:
+        return _fail("参数", [str(exc)])
+
+    payload: dict[str, Any] = {
+        "ok": True,
+        "root": str(result.root),
+        "count": len(result.images),
+        "with_caption": len(result.with_caption),
+        "images": [
+            {
+                "name": entry.name,
+                "size": entry.size,
+                "has_caption": entry.has_caption,
+                "caption_bytes": entry.caption_bytes,
+            }
+            for entry in result.images
+        ],
+        "skipped": {"count": len(result.skipped), "names": result.skipped},
+    }
+    if not result.images:
+        payload["warning"] = "目录里没有 .jpg/.jpeg/.png，打标无从跑起"
+    return JSONResponse(payload)
+
+
+@app.post("/caption")
+def caption(
+    dataset_dir: str = Form(...),
+    model: str = Form(...),
+    kind: str = Form(...),
+    trigger: str = Form(""),
+    backend: str = Form("wd_tagger"),
+    overwrite: str = Form("1"),
+    images: str = Form(""),
+    refresh: str = Form("0"),
+) -> JSONResponse:
+    """对图集跑一批打标。单张失败不中断，失败原因原样带回。"""
+    try:
+        target = TargetModel(model)
+    except ValueError:
+        return _fail("参数", [f"未知目标模型：{model!r}"])
+    try:
+        dataset_kind = DatasetKind(kind)
+    except ValueError:
+        return _fail("参数", [f"未知数据集类型：{kind!r}"])
+
+    raw = dataset_dir.strip()
+    if not raw:
+        return _fail("参数", ["图集目录不能为空"])
+    try:
+        scan_result = scan_images(Path(raw).expanduser())
+    except ExportError as exc:
+        return _fail("参数", [str(exc)])
+    if not scan_result.images:
+        return _fail("参数", [f"目录里没有可打标的图（只认 .jpg/.jpeg/.png）：{scan_result.root}"])
+
+    available = [entry.name for entry in scan_result.images]
+    try:
+        wanted = _wanted_images(images, available)
+    except ValueError as exc:
+        return _fail("参数", [str(exc)])
+
+    # 换了模型权重就重建后端：否则会拿旧 session 去打新图
+    if refresh.strip().lower() not in {"", "0", "false", "off"}:
+        _forget_backends()
+
+    try:
+        backend_obj = _caption_backend(backend)
+    except KeyError as exc:
+        return _fail("后端", [f"未知后端：{backend!r}（{exc}）"])
+    except RuntimeError as exc:
+        # 后端自己给出的 reason，原样返回，不自己另造一句
+        return _fail("后端", [str(exc)])
+
+    overwrite_existing = overwrite.strip().lower() not in {"", "0", "false", "off"}
+    paths = [
+        entry.path
+        for entry in scan_result.images
+        if entry.name in set(wanted)
+    ]
+    # 只有「不覆盖」时，已有 .txt 才算 skipped；覆盖时那是被重写，不是跳过
+    before = (
+        set()
+        if overwrite_existing
+        else {path.name for path in paths if path.with_suffix(".txt").is_file()}
+    )
+    ctx = CaptionContext(
+        target=target,
+        kind=dataset_kind,
+        trigger=trigger.strip(),
+    )
+    try:
+        report = run_batch(
+            paths,
+            ctx,
+            backend_obj,
+            overwrite=overwrite_existing,
+        )
+    except Exception as exc:  # 兜底：批量级别的失败也要说清楚，不吞
+        return _fail("打标", [f"{type(exc).__name__}: {exc}"])
+
+    items: list[dict[str, Any]] = []
+    failed_items: list[dict[str, Any]] = []
+    for item in report.items:
+        if item.error is not None:
+            status = "failed"
+            failed_items.append({"image": item.image.name, "error": item.error, "retryable": True})
+        elif item.image.name in before:
+            status = "skipped"
+        else:
+            status = "written"
+        items.append(
+            {
+                "image": item.image.name,
+                "status": status,
+                "caption": item.caption,
+                "error": item.error,
+            }
+        )
+
+    return JSONResponse(
+        {
+            "ok": report.failed == 0,
+            "backend": getattr(backend_obj, "name", backend),
+            "total": len(paths),
+            "written": report.written,
+            "failed": report.failed,
+            "skipped": report.skipped,
+            "items": items,
+            "failed_items": failed_items,
+        }
+    )
 
 
 @app.post("/export")
