@@ -5,6 +5,7 @@
 * :func:`default_plan` / :data:`VRAM_TIERS` —— §8 读口
 * :func:`acceptance_plan` —— 训练后验收（采样参数 + 三提示法）
 * :func:`render_acceptance_markdown` —— 把验收数据渲染成用户可读的 `验收.md`
+* :func:`render_train_config` —— 把配置渲染成可落盘、可直接进 zip 的字节
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from loraforge.configs.problems import (
     known_codes,
     validate_config_detailed,
 )
+from loraforge.configs.render import render_train_config
 
 __all__ = [
     "TrainingPlan",
@@ -59,4 +61,5 @@ __all__ = [
     "acceptance_dict",
     "krea2_mu",
     "render_acceptance_markdown",
+    "render_train_config",
 ]
