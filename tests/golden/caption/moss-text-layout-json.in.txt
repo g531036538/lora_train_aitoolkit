@@ -1,0 +1,1 @@
+{"object": "a red poster", "appearance": "soft lighting", "composition": "yellow background, flat graphic style", "texts": [{"text": "SALE", "role": "header", "bbox": [-128, -64, 0, 64]}, {"text": "Aurora", "role": "label", "bbox": [0, -96, 64, 96]}]}
