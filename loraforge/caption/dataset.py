@@ -108,7 +108,7 @@ def analyze_dataset(
                 severity="warn",
                 message=(
                     f"{len(transparent)} 张图带真正的透明通道（共 {total} 张图）；"
-                    "训练读取时透明区可能被当成黑底或白底，建议先合成到纯色底再导出"
+                    "训练读取时透明区可能被当成黑底或白底，到导出页用「合成到纯色底」生成 RGB 副本后再导出"
                 ),
                 files=tuple(transparent[:sample]),
             )
