@@ -62,10 +62,15 @@ def test_index_lists_unavailable_backend_with_reason(monkeypatch: pytest.MonkeyP
 
 
 def test_healthz_reports_models_and_backends() -> None:
-    payload = CLIENT.get("/healthz").json()
+    response = CLIENT.get("/healthz")
+    assert response.status_code == 200
+    payload = response.json()
     assert payload["ok"] is True
+    assert len(payload["models"]) == 3                                  # 恰好三款，不多不少
     assert set(payload["models"]) == {target.value for target in PROFILES}
-    assert "fake" in payload["backends"]
+    # 后端清单跟着 list_backends() 走：这里只断言形状，不钉死具体有哪些后端
+    assert isinstance(payload["backends"], list)
+    assert payload["backends"] == [info.key for info in ui._backends()]
 
 
 def test_export_endpoint_writes_zip_and_reports_missing(scratch: Path) -> None:
@@ -138,3 +143,29 @@ def test_export_rejects_unknown_model_and_tier(scratch: Path) -> None:
     bad_tier = CLIENT.post("/export", data={**base, "model": "sdxl", "vram_tier": "999"})
     assert bad_tier.status_code == 400
     assert "显存档位" in bad_tier.json()["errors"][0]
+
+
+def test_export_bad_params_are_4xx_never_500(scratch: Path) -> None:
+    """非法参数一律 4xx 且带中文原因，绝不允许 500 把栈甩给用户。"""
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    (dataset / "a.png").write_bytes(b"\\x89PNG\\r\\n\\x1a\\n")
+    good = {
+        "dataset_dir": str(dataset),
+        "out_zip": str(scratch / "out.zip"),
+        "model": "sdxl",
+        "trigger": "mytoken",
+        "vram_tier": "24",
+    }
+    cases = {
+        "目录不存在": {**good, "dataset_dir": str(scratch / "no_such_dir")},
+        "输出不是 zip": {**good, "out_zip": str(scratch / "out.tar")},
+        "未知模型": {**good, "model": "flux"},
+        "未知档位": {**good, "vram_tier": "999"},
+        "触发词空白": {**good, "trigger": "  "},
+    }
+    for name, payload in cases.items():
+        response = CLIENT.post("/export", data=payload)
+        assert 400 <= response.status_code < 500, f"{name} 返回了 {response.status_code}"
+        assert response.json()["errors"], f"{name} 没给原因"
+    assert not (scratch / "out.zip").exists()           # 一条都不该写出成品
