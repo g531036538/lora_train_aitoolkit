@@ -1,0 +1,81 @@
+# SDXL LoRA / ai-toolkit —— 20 张图集示例
+# 训练底模：stabilityai/stable-diffusion-xl-base-1.0（legacy StableDiffusion 路径）
+#   arch: sdxl            toolkit/config_modules.py:790-792；LEGACY_ARCHS 见 util/get_model.py:46-58
+#   noise_scheduler ddpm   SDXL 不是 flow matching，配 flowmatch 会训坏（config_modules.py:383）
+#   min_snr_gamma 不设     docs/models/sdxl.md:228（须 >1e-6 才生效）
+#   vae_dtype float32      docs/models/sdxl.md:233（fp16 VAE 偶发 NaN）
+#   不开 quantize          该开关只对 transformer 系生效（config_modules.py:697-698），小显存用 low_vram
+#   bucket 必须能被 16 整除 toolkit/stable_diffusion_model.py:364-372
+# 出图：同底模，sample.sampler 必须与 train.noise_scheduler 一致
+#       采样 25 步 / CFG 6.0 来自 toolkit/models/registry.py:50
+# 改这两行就能跑：datasets[0].folder_path、training_folder
+job: extension
+config:
+  name: sdxl-lora-v1
+  process:
+  - type: sd_trainer
+    training_folder: ./output
+    device: cuda:0
+    trigger_word: mychar
+    network:
+      type: lora
+      linear: 32
+      linear_alpha: 32
+    save:
+      dtype: float16
+      save_every: 250
+      max_step_saves_to_keep: 4
+      push_to_hub: false
+    datasets:
+    - folder_path: ./datasets/my_character
+      caption_ext: txt
+      caption_dropout_rate: 0.05
+      shuffle_tokens: false
+      cache_latents_to_disk: true
+      buckets: true
+      resolution:
+      - 512
+      - 768
+      - 1024
+    train:
+      batch_size: 1
+      steps: 2500
+      gradient_accumulation_steps: 1
+      train_unet: true
+      train_text_encoder: false
+      gradient_checkpointing: true
+      optimizer: adamw8bit
+      lr: 0.0001
+      dtype: bf16
+      ema_config:
+        use_ema: true
+        ema_decay: 0.99
+      noise_scheduler: ddpm
+    sample:
+      sample_every: 250
+      sample_start_step: 0
+      width: 1024
+      height: 1024
+      prompts:
+      - '[trigger], portrait photo, plain background, soft lighting'
+      - '[trigger] walking through a rainy city street at night, neon signs, full
+        body'
+      - portrait photo, plain background, soft lighting
+      neg: ''
+      seed: 42
+      walk_seed: false
+      sampler: ddpm
+      sample_steps: 25
+      guidance_scale: 6.0
+    logging:
+      log_every: 10
+      use_wandb: false
+      verbose: false
+    model:
+      name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+      arch: sdxl
+      dtype: bf16
+      vae_dtype: float32
+meta:
+  name: '[name]'
+  version: '1.0'
