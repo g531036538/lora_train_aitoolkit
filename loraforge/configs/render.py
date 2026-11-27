@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 import yaml
@@ -37,11 +38,21 @@ _HEADER_TEMPLATE: Final[str] = (
 
 #: 可移植档下第四行的说明。导出 zip 是给云端机器训的，那边没有生成机的盘符。
 _PORTABLE_NOTE: Final[str] = (
-    "{name}（相对于训练机上的当前目录；解压后请把 folder_path 改成数据所在目录的绝对路径）"
+    "{name}（相对于训练机上的当前目录；解压后请把 folder_path 改成数据所在目录的绝对路径；"
+    "training_folder 同理）"
 )
 
 #: 非可移植档下第四行的说明：明说只能本机训，别让人以为能直接搬走。
 _ABSOLUTE_NOTE: Final[str] = "{path}（绝对路径；这份配置只能在本机直接训练）"
+
+
+def _looks_absolute(path: str) -> bool:
+    """是否像绝对路径：带盘符、以 ``/`` 开头，或是 UNC 的 ``\\\\``。
+
+    相对路径（``output/lora-v1``）不算——那是用户自己写的嵌套，渲染时原样保留。
+    """
+    raw = path.strip()
+    return bool(re.match(r"^[A-Za-z]:[\\/]", raw)) or raw.startswith(("/", "\\\\"))
 
 
 def _portable_folder_name(dataset_dir: str) -> str:
@@ -53,6 +64,17 @@ def _portable_folder_name(dataset_dir: str) -> str:
     normalized = dataset_dir.replace("\\", "/").rstrip("/")
     name = normalized.rsplit("/", 1)[-1]
     return name or "."
+
+
+def _portable_training_folder(output_dir: str) -> str:
+    """``training_folder`` 的可移植写法：绝对路径取最后一段，相对路径不动。
+
+    绝对路径在训练机上必然不对（Issue #69 同源问题）；相对路径是用户自己写的、
+    有意义的嵌套（``output/lora-v1``），取 basename 会把中间目录吃掉，所以保留。
+    """
+    if not _looks_absolute(output_dir):
+        return output_dir
+    return _portable_folder_name(output_dir)
 
 
 def render_train_config(
@@ -76,9 +98,14 @@ def render_train_config(
     cfg = build_config(model, plan)
     dataset_name = _portable_folder_name(plan.dataset_dir)
     if portable:
-        datasets = cfg["config"]["process"][0].get("datasets") or []
+        process = cfg["config"]["process"][0]
+        datasets = process.get("datasets") or []
         if datasets:
             datasets[0]["folder_path"] = dataset_name
+        if process.get("training_folder"):
+            process["training_folder"] = _portable_training_folder(
+                str(process["training_folder"])
+            )
     body = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
     if header:
         profile = PROFILES[model]

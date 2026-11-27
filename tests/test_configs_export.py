@@ -129,8 +129,11 @@ def test_exported_train_yaml_is_trainable(target: TargetModel, scratch: pathlib.
     assert folder_path == WORK
     assert "\\" not in folder_path and ":" not in folder_path, folder_path
     # 除 folder_path 外其余键与 build_config 完全一致（可移植档只动这一个键）
+    process_cfg = loaded["config"]["process"][0]
     rest = dataclasses.replace(
-        plan, dataset_dir=loaded["config"]["process"][0]["datasets"][0]["folder_path"]
+        plan,
+        dataset_dir=process_cfg["datasets"][0]["folder_path"],
+        output_dir=process_cfg["training_folder"],
     )
     assert loaded == build_config(target, rest)
     assert validate_config(loaded, target) == []
@@ -224,3 +227,31 @@ def test_non_portable_keeps_plan_absolute_path(scratch: pathlib.Path) -> None:
     # 头部说明也要跟着变，不能写「相对当前目录」这种在非可移植档下是假话的话
     head = body.decode("utf-8").splitlines()[:4]
     assert "绝对路径" in head[3] and "相对" not in head[3]
+
+
+def test_training_folder_is_portable(scratch: pathlib.Path) -> None:
+    """``training_folder`` 同一套规则：绝对路径取最后一段，相对路径原样保留。
+
+    相对路径是用户写的嵌套（``output/lora-v1``），取 basename 会把中间目录吃掉；
+    绝对路径在训练机上必然不对（Issue #69 的同源问题）。
+    """
+    cases = {
+        r"C:\Users\someone\out\run1": "run1",
+        "/home/someone/out/run1": "run1",
+        "output/lora-v1": "output/lora-v1",
+        "./outputs/exp/run1": "./outputs/exp/run1",
+    }
+    for raw, expected in cases.items():
+        plan = dataclasses.replace(
+            default_plan(TargetModel.MOSS), dataset_dir=str(scratch), output_dir=raw
+        )
+        for target in TargetModel:
+            loaded = yaml.safe_load(render_train_config(target, plan))
+            assert (
+                loaded["config"]["process"][0]["training_folder"] == expected
+            ), (target, raw)
+        # 非可移植档保持 plan 原值
+        raw_loaded = yaml.safe_load(
+            render_train_config(TargetModel.MOSS, plan, portable=False)
+        )
+        assert raw_loaded["config"]["process"][0]["training_folder"] == raw
