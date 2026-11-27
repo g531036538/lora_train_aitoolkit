@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
 from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -29,6 +28,7 @@ from loraforge.configs import (
     default_plan,
     plan_for_tier,
     render_acceptance_markdown,
+    render_train_config,
     validate_config_detailed,
 )
 from loraforge.export import ExportError, package, scan_images
@@ -701,7 +701,8 @@ def preview_config(
             },
             "problems": payload["problems"],
             "problem_groups": payload["problem_groups"],
-            "yaml": yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+            # 预览与导出同源：都走 render_train_config(header=True)，字节一致。
+            "yaml": render_train_config(target, plan).decode("utf-8"),
         }
     )
 
@@ -838,9 +839,8 @@ def export_zip(
 
     out.parent.mkdir(parents=True, exist_ok=True)
     config_path = out.parent / "train.yaml"
-    config_path.write_bytes(
-        yaml.safe_dump(config, allow_unicode=True, sort_keys=False).encode("utf-8")
-    )
+    # 与 /config/preview 同源同参：预览看到的字节就是进 zip 的字节（含 header）。
+    config_path.write_bytes(render_train_config(target, plan))
 
     acceptance_text = acceptance_markdown(target, plan)
     with_images = include_images.strip().lower() not in {"", "0", "false", "off"}
