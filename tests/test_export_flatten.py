@@ -84,12 +84,15 @@ def test_flatten_refuses_to_overwrite_existing(scratch: Path) -> None:
 
     report = flatten_alpha([source], out_dir)
 
-    assert (report.written, report.failed) == (0, 1)
+    # 已存在不是失败：跳过、写明原因、原产物一字不动
+    assert (report.written, report.failed, report.skipped) == (0, 0, 1)
+    assert report.ok is True
     assert existing.read_bytes() == b"do-not-touch"
     item = report.items[0]
     assert item[0] == source and item[1] is None
-    assert "不覆盖" in (item[2] or "")
-    assert report.failures and "不覆盖" in report.failures[0][1]
+    assert "已存在，跳过（原图没动）" in (item[2] or "")
+    assert report.exists and "跳过" in report.exists[0][1]
+    assert report.failures == []
 
 
 def test_flatten_never_writes_into_source_dir(scratch: Path) -> None:
@@ -100,9 +103,10 @@ def test_flatten_never_writes_into_source_dir(scratch: Path) -> None:
 
     report = flatten_alpha([source], dataset)  # 输出目录就是图集本身
 
-    assert (report.written, report.failed) == (0, 1)
+    # 库层面只认「同名已存在 → 跳过」；界面 /flatten 会直接 400 拦在更前面
+    assert (report.written, report.failed, report.skipped) == (0, 0, 1)
     assert _png_bytes(source) == before
-    assert "不覆盖" in (report.items[0][2] or "")
+    assert "跳过" in (report.items[0][2] or "")
 
 
 def test_flatten_copies_sidecar_byte_for_byte(scratch: Path) -> None:
@@ -146,11 +150,12 @@ def test_flatten_one_bad_file_does_not_stop_the_batch(scratch: Path) -> None:
 
     report = flatten_alpha([good_a, bad, good_c], out_dir)
 
-    assert (report.written, report.failed) == (2, 1)
+    assert (report.written, report.failed, report.skipped) == (2, 1, 0)
     assert (out_dir / "a.png").is_file() and (out_dir / "c.png").is_file()
     reasons = {source.name: reason for source, product, reason in report.items if product is None}
     assert "notes.txt" in reasons
     assert "图片" in reasons["notes.txt"]  # 中文原因，不是异常堆栈
+    assert [source.name for source, _message in report.errors] == ["notes.txt"]
 
 
 def test_flatten_rejects_bad_background(scratch: Path) -> None:
@@ -165,3 +170,25 @@ def test_flatten_rejects_bad_background(scratch: Path) -> None:
             assert "底色" in str(exc)
         else:  # pragma: no cover - 只是让失败信息更直白
             raise AssertionError(f"底色 {bad} 应该被拒")
+
+
+def test_flatten_separates_skipped_from_failed(scratch: Path) -> None:
+    """同一批里：已存在 → skipped，读不了 → failed，两者不许混淆。"""
+    dataset = scratch / "src"
+    dataset.mkdir()
+    skipped_source = _rgba_png(dataset / "a.png")
+    error_source = dataset / "b.png"
+    error_source.write_bytes(b"not an image\n")
+    out_dir = scratch / "out"
+    out_dir.mkdir()
+    (out_dir / "a.png").write_bytes(b"keep-me")
+
+    report = flatten_alpha([skipped_source, error_source], out_dir)
+
+    assert (report.written, report.skipped, report.failed) == (0, 1, 1)
+    assert report.ok is False
+    assert [source.name for source, _m in report.exists] == ["a.png"]
+    assert [source.name for source, _m in report.errors] == ["b.png"]
+    assert "已存在，跳过（原图没动）" in report.exists[0][1]
+    assert "不覆盖" not in report.errors[0][1]
+    assert (out_dir / "a.png").read_bytes() == b"keep-me"

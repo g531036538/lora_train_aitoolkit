@@ -936,7 +936,8 @@ def test_flatten_endpoint_refuses_dataset_as_output(scratch: Path) -> None:
     assert source.read_bytes() == before
 
 
-def test_flatten_endpoint_reports_existing_target_as_failed(scratch: Path) -> None:
+def test_flatten_endpoint_reports_existing_target_as_skipped(scratch: Path) -> None:
+    """重跑同一个 out_dir 不是错误：skipped 计数、status=exists、原产物不动。"""
     dataset = scratch / "ds"
     dataset.mkdir()
     _rgba_png(dataset / "a.png")
@@ -952,10 +953,39 @@ def test_flatten_endpoint_reports_existing_target_as_failed(scratch: Path) -> No
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["ok"] is False
-    assert (body["written"], body["failed"]) == (0, 1)
-    assert "不覆盖" in body["items"][0]["error"]
+    assert body["ok"] is True
+    assert (body["written"], body["skipped"], body["failed"]) == (0, 1, 0)
+    assert body["error_items"] == []
+    assert body["exists"][0]["image"] == "a.png"
+    assert "已存在，跳过（原图没动）" in body["exists"][0]["message"]
+    assert body["items"][0]["status"] == "exists"
     assert existing.read_bytes() == b"keep"
+
+
+def test_flatten_endpoint_separates_exists_from_error(scratch: Path) -> None:
+    """同一批里 1 张已存在 + 1 张坏图：响应必须分开报 exists 与 errors。"""
+    dataset = scratch / "ds"
+    dataset.mkdir()
+    _rgba_png(dataset / "a.png")
+    (dataset / "b.png").write_bytes(b"not an image\n")
+    out_dir = scratch / "flat"
+    out_dir.mkdir()
+    (out_dir / "a.png").write_bytes(b"keep")
+
+    response = CLIENT.post(
+        "/flatten",
+        data={"dataset_dir": str(dataset), "out_dir": str(out_dir), "background": "white"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is False
+    assert (body["written"], body["skipped"], body["failed"]) == (0, 1, 1)
+    assert [row["image"] for row in body["exists"]] == ["a.png"]
+    assert [row["image"] for row in body["error_items"]] == ["b.png"]
+    assert "不覆盖" not in body["error_items"][0]["message"]
+    statuses = {row["image"]: row["status"] for row in body["items"]}
+    assert statuses == {"a.png": "exists", "b.png": "failed"}
 
 
 def test_flatten_endpoint_rejects_unknown_background(scratch: Path) -> None:

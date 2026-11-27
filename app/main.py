@@ -500,6 +500,7 @@ def flatten(
         for source, product, _error in report.items
         if product is not None and Path(source).with_suffix(".txt").is_file()
     )
+    skipped_names = {Path(source).name for source, _message in report.exists}
     return JSONResponse(
         {
             "ok": report.ok,
@@ -508,17 +509,33 @@ def flatten(
             "background": key,
             "rgb": list(BACKGROUNDS[key]),
             "written": report.written,
+            "skipped": report.skipped,
             "failed": report.failed,
+            "exists": [
+                {"image": Path(source).name, "message": message}
+                for source, message in report.exists
+            ],
+            "error_items": [
+                {"image": Path(source).name, "message": message}
+                for source, message in report.errors
+            ],
             "copied_captions": copied,
             "items": [
                 {
                     "image": Path(source).name,
                     "product": Path(product).name if product is not None else None,
+                    "status": (
+                        "written"
+                        if product is not None
+                        else "exists"
+                        if Path(source).name in skipped_names
+                        else "failed"
+                    ),
                     "error": error,
                 }
                 for source, product, error in report.items
             ],
-            "note": "原图没有改动（只在新目录里生成 RGB 副本）",
+            "note": "原图没有改动（只在新目录里生成 RGB 副本）；目标目录已有的同名文件跳过，不覆盖",
         }
     )
 
