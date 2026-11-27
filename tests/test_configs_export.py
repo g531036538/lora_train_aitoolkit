@@ -103,8 +103,11 @@ def test_exported_train_yaml_is_trainable(target: TargetModel, scratch: pathlib.
     assert (report.images, report.captions) == (3, 3)
 
     with zipfile.ZipFile(report.zip_path) as archive:
-        member = f"{WORK}/train.yaml"
+        # 布局（Issue #72）：配置在 zip 根目录，图与同名 .txt 在 <图集目录名>/ 一层。
+        member = "train.yaml"
         assert member in archive.namelist(), archive.namelist()
+        assert f"{WORK}/frame_01.png" in archive.namelist()
+        assert f"{WORK}/frame_01.txt" in archive.namelist()
         inside = archive.read(member)
 
     # 1. 逐字节；并钉住渲染口径（头部四行、纯 LF、以换行结尾）
@@ -188,7 +191,7 @@ def test_tampered_config_inside_zip_is_caught(scratch: pathlib.Path) -> None:
     report = package(dataset, config_path, scratch / "lora.zip")
 
     with zipfile.ZipFile(report.zip_path) as archive:
-        loaded = yaml.safe_load(archive.read(f"{WORK}/train.yaml"))
+        loaded = yaml.safe_load(archive.read("train.yaml"))
 
     assert validate_config(loaded, TargetModel.KREA2), "空 name_or_path 必须被当 error"
     codes = {problem.code for problem in validate_config_detailed(loaded, TargetModel.KREA2)}
