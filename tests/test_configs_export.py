@@ -107,22 +107,32 @@ def test_exported_train_yaml_is_trainable(target: TargetModel, scratch: pathlib.
         assert member in archive.namelist(), archive.namelist()
         inside = archive.read(member)
 
-    # 1. 逐字节；并钉住渲染口径（头部三行、纯 LF、以换行结尾）
+    # 1. 逐字节；并钉住渲染口径（头部四行、纯 LF、以换行结尾）
     assert inside == payload
     assert b"\r\n" not in inside
     assert inside.endswith(b"\n")
-    head = inside.decode("utf-8").splitlines()[:3]
+    head = inside.decode("utf-8").splitlines()[:4]
     assert head[0].startswith("# 由 LoRAForge ") and "生成" in head[0]
     assert head[1].startswith("# 目标模型：") and "显存档位：" in head[1]
     assert head[2] == f"# 触发词：{plan.trigger}"
-    # header=False 只剩 yaml 本体，与 build_config 的 dict 逐键一致
-    body = render_train_config(target, plan, header=False)
+    # 第四行随 portable 变文案：默认是可移植档，得说清「相对当前目录 + 要改绝对路径」
+    assert head[3].startswith("# 数据集目录：") and WORK in head[3]
+    assert "绝对路径" in head[3]
+    # header=False 只剩 yaml 本体；portable=False 时与 build_config 的 dict 逐键一致
+    body = render_train_config(target, plan, header=False, portable=False)
     assert yaml.safe_load(body) == cfg
     assert not body.startswith(b"#")
 
-    # 2. 语义与校验
+    # 2. 语义与校验：默认（可移植档）folder_path 是目录名，不是生成机绝对路径
     loaded = yaml.safe_load(inside)
-    assert loaded == cfg
+    folder_path = loaded["config"]["process"][0]["datasets"][0]["folder_path"]
+    assert folder_path == WORK
+    assert "\\" not in folder_path and ":" not in folder_path, folder_path
+    # 除 folder_path 外其余键与 build_config 完全一致（可移植档只动这一个键）
+    rest = dataclasses.replace(
+        plan, dataset_dir=loaded["config"]["process"][0]["datasets"][0]["folder_path"]
+    )
+    assert loaded == build_config(target, rest)
     assert validate_config(loaded, target) == []
 
     # 3. 能被 ai-toolkit 吃
@@ -180,3 +190,37 @@ def test_tampered_config_inside_zip_is_caught(scratch: pathlib.Path) -> None:
     assert validate_config(loaded, TargetModel.KREA2), "空 name_or_path 必须被当 error"
     codes = {problem.code for problem in validate_config_detailed(loaded, TargetModel.KREA2)}
     assert "model.arch-suffix" in codes
+
+
+def test_portable_folder_path_handles_windows_and_posix(scratch: pathlib.Path) -> None:
+    """可移植档只取目录名：Windows 绝对路径、POSIX 绝对路径、末尾斜杠都要认。"""
+    cases = {
+        r"C:\Users\someone\flat": "flat",
+        "/home/someone/datasets/flat": "flat",
+        "./datasets/my_character/": "my_character",
+    }
+    for raw, expected in cases.items():
+        plan = dataclasses.replace(
+            default_plan(TargetModel.KREA2), dataset_dir=raw, output_dir=str(scratch)
+        )
+        for target in TargetModel:
+            body = render_train_config(target, plan)
+            loaded = yaml.safe_load(body)
+            assert loaded["config"]["process"][0]["datasets"][0]["folder_path"] == expected
+
+
+def test_non_portable_keeps_plan_absolute_path(scratch: pathlib.Path) -> None:
+    """portable=False 保持原行为：folder_path 就是 plan.dataset_dir，原样不加工。"""
+    dataset = _make_dataset(scratch)
+    plan = dataclasses.replace(
+        default_plan(TargetModel.SDXL),
+        dataset_dir=str(dataset),
+        output_dir=str(scratch / "output"),
+    )
+    body = render_train_config(TargetModel.SDXL, plan, portable=False)
+    loaded = yaml.safe_load(body)
+    assert loaded["config"]["process"][0]["datasets"][0]["folder_path"] == str(dataset)
+    assert loaded == build_config(TargetModel.SDXL, plan)
+    # 头部说明也要跟着变，不能写「相对当前目录」这种在非可移植档下是假话的话
+    head = body.decode("utf-8").splitlines()[:4]
+    assert "绝对路径" in head[3] and "相对" not in head[3]
