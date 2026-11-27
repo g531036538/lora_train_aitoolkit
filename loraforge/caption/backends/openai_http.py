@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from loraforge.caption.base import BackendCaps, CaptionContext
+from loraforge.caption.reasons import human_reason
 from loraforge.models import DatasetKind, TargetModel
 
 try:  # httpx 预装在机器上；缺失时也不让 import 本模块失败
@@ -59,14 +60,17 @@ _CHECK_IMAGE = (
 
 
 def availability() -> tuple[bool, str]:
-    """返回 (是否可用, 不可用原因)。不抛异常，供 list_backends 调用。"""
+    """返回 (是否可用, 带稳定前缀的 reason)。不抛异常，供 list_backends 调用。
+
+    前缀词表见 :mod:`loraforge.caption.reasons`；可用时固定返回 ``ok``。
+    """
     if DEPENDENCY_ERROR:
-        return False, DEPENDENCY_ERROR
+        return False, "missing_dependency:httpx"
     if not os.getenv(ENV_URL, "").strip():
-        return False, f"未配置 {ENV_URL}"
+        return False, f"requires_credentials:未配置 {ENV_URL}"
     if not os.getenv(ENV_MODEL, "").strip():
-        return False, f"未配置 {ENV_MODEL}"
-    return True, ""
+        return False, f"requires_credentials:未配置 {ENV_MODEL}"
+    return True, "ok"
 
 
 def _prompt(ctx: CaptionContext) -> str:
@@ -276,7 +280,7 @@ def check_endpoint(
     available, reason = availability()
     if not available:
         print("端点可达：否", file=err)
-        print(f"原因：{reason}", file=err)
+        print(f"原因：{human_reason(reason)}", file=err)
         return 2
 
     try:
