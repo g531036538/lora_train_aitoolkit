@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,7 +69,7 @@ def _http_backend_info() -> BackendInfo:
             label="OpenAI 兼容 Vision API",
             caps=BackendCaps(
                 needs_gpu=False,
-                supports_tags=False,
+                supports_tags=True,
                 supports_prose=True,
                 languages=("en", "zh"),
             ),
@@ -77,20 +79,26 @@ def _http_backend_info() -> BackendInfo:
 
 
 def list_backends() -> list[BackendInfo]:
-    """列出全部已知后端。不可用也列，reason 是「稳定前缀 + 可选细节」。"""
-    from loraforge.testing import FakeBackend
+    """列出全部已知后端。不可用也列，reason 是「稳定前缀 + 可选细节」。
 
-    fake_caps = FakeBackend().caps()
-    return [
-        BackendInfo(
-            key="fake",
-            label="Fake（测试用，不读图）",
-            caps=fake_caps,
-            available=True,
-            reason="ok",
-        ),
-        _http_backend_info(),
-    ]
+    Fake 只在显式设置 ``LORAFORGE_ENABLE_FAKE=1`` 时列出，避免用户误选假后端。
+    ``get_backend("fake")`` 不受此开关影响，测试仍可直接构造。
+    """
+    backends: list[BackendInfo] = []
+    if os.getenv("LORAFORGE_ENABLE_FAKE") == "1":
+        from loraforge.testing import FakeBackend
+
+        backends.append(
+            BackendInfo(
+                key="fake",
+                label="Fake（测试用，不读图）",
+                caps=FakeBackend().caps(),
+                available=True,
+                reason="ok",
+            )
+        )
+    backends.append(_http_backend_info())
+    return backends
 
 
 def get_backend(key: str) -> CaptionBackend:

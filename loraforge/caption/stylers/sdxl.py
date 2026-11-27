@@ -12,10 +12,41 @@ from typing import Iterable
 
 from loraforge.caption.base import CaptionContext
 
-_TAG_SPLIT_RE = re.compile(r"[,\n;]+")
+_TAG_SPLIT_RE = re.compile(r"[,;\n]+|(?<!\d)\.(?!\d)|[!?。！？]+")
 _WEIGHT_RE = re.compile(r"[\(\[]\s*([^()\[\]:]+?)\s*:\s*[0-9.]+(?:e[-+]?\d+)?\s*[\)\]]", re.IGNORECASE)
 _LEADING_ARTICLE_RE = re.compile(r"^(?:a|an|the)\s+", re.IGNORECASE)
 _LEADING_AND_RE = re.compile(r"^(?:and|plus|with)\s+", re.IGNORECASE)
+_TRAILING_AND_RE = re.compile(r"\s+(?:and|plus|with)\s*$", re.IGNORECASE)
+_TRAILING_COPULA_RE = re.compile(r"\s+(?:is|are|was|were|has|have)\s*$", re.IGNORECASE)
+
+# 模型偶尔会返回句子而不是标签；这些是句子的主语/动作外壳，剥掉后保留名词。
+_SENTENCE_FRAME_RE = re.compile(
+    r"^(?:"
+    r"(?:she|he|they|it|the (?:woman|man|girl|boy|person|character|subject))"
+    r"\s+(?:is|are|was|were)\s+"
+    r"|(?:she|he|they|it)\s+(?:has|have)\s+"
+    r"|(?:wearing|wears|wore|holding|holds|carrying|carries|dressed\s+in"
+    r"|standing(?:\s+(?:in|at|on|near|by|through|against))?"
+    r"|sitting(?:\s+(?:in|at|on|near|by))?"
+    r"|lying(?:\s+(?:in|on))?"
+    r"|walking(?:\s+(?:in|through))?"
+    r"|posing(?:\s+(?:in|on))?"
+    r"|leaning(?:\s+(?:against|on))?)\s+"
+    r")",
+    re.IGNORECASE,
+)
+_LEADING_LABEL_RE = re.compile(
+    r"^(?:here (?:are|is) (?:the )?(?:tags?|caption)|tags?|caption)\s*[:\-]\s*",
+    re.IGNORECASE,
+)
+_INLINE_FRAME_RE = re.compile(
+    r"(?:^|\s+)(?:(?:she|he|they|it|the (?:woman|man|girl|boy|person|character|subject))"
+    r"\s+(?:is|are|was|were)\s+"
+    r"|(?:standing|sitting|lying|walking|posing|leaning)\s+"
+    r"(?:in|at|on|near|by|through|against)\s+"
+    r"|(?:wearing|wears|wore|holding|holds|carrying|carries)\s+)",
+    re.IGNORECASE,
+)
 
 _FILLER_PREFIXES: tuple[str, ...] = (
     "a photo of",
@@ -26,6 +57,14 @@ _FILLER_PREFIXES: tuple[str, ...] = (
     "picture of",
     "this is",
     "there is",
+    "the image shows",
+    "the image depicts",
+    "this image shows",
+    "in this image",
+    "the picture shows",
+    "the photo shows",
+    "we can see",
+    "you can see",
 )
 
 # 这些词不是 Danbooru 标签，写进 LoRA 会把「画质口号」也学进去。
@@ -42,6 +81,10 @@ _DROP_TAGS: frozenset[str] = frozenset(
         "extremely detailed",
         "award winning",
         "professional photography",
+        "she",
+        "he",
+        "they",
+        "it",
     }
 )
 
@@ -65,6 +108,11 @@ _CANONICAL: dict[str, str] = {
     "blue eyed": "blue eyes",
     "green eyed": "green eyes",
     "brown eyed": "brown eyes",
+    "woman": "1girl",
+    "young woman": "1girl",
+    "man": "1boy",
+    "young man": "1boy",
+    "person": "1other",
 }
 
 
@@ -86,11 +134,18 @@ def _clean_tag(tag: str) -> str:
     tag = _WEIGHT_RE.sub(r"\1", tag)
     tag = tag.lower().replace("_", " ")
     tag = re.sub(r"\s+", " ", tag).strip(" ,;:.!?、，；：。！？-")
-    tag = _LEADING_AND_RE.sub("", tag)
-    tag = _strip_filler(tag)
-    tag = _LEADING_ARTICLE_RE.sub("", tag)
-    tag = _strip_filler(tag)
-    tag = re.sub(r"\s+", " ", tag).strip(" ,;:.!?、，；：。！？-")
+    tag = _LEADING_LABEL_RE.sub("", tag)
+    for _ in range(3):
+        before = tag
+        tag = _SENTENCE_FRAME_RE.sub("", tag)
+        tag = _LEADING_AND_RE.sub("", tag)
+        tag = _strip_filler(tag)
+        tag = _LEADING_ARTICLE_RE.sub("", tag)
+        tag = _TRAILING_AND_RE.sub("", tag)
+        tag = _TRAILING_COPULA_RE.sub("", tag)
+        tag = re.sub(r"\s+", " ", tag).strip(" ,;:.!?、，；：。！？-")
+        if tag == before:
+            break
     tag = _CANONICAL.get(tag, tag)
     return tag
 
@@ -101,7 +156,8 @@ def _iter_tags(raw: str, tags: list[str] | None) -> Iterable[str]:
             yield item
         return
     for item in _TAG_SPLIT_RE.split(raw):
-        yield item
+        for part in _INLINE_FRAME_RE.split(item):
+            yield part
 
 
 class SdxlTagsStyler:
@@ -131,7 +187,12 @@ class SdxlTagsStyler:
         if trigger:
             # 触发词最前；正文里重复出现的同词去掉，避免两次身份信号。
             trigger_low = trigger.lower()
-            cleaned = [t for t in cleaned if t.lower() != trigger_low]
+            trigger_norm = re.sub(r"\s+", " ", trigger.lower().replace("_", " "))
+            cleaned = [
+                t
+                for t in cleaned
+                if t.lower() != trigger_low and t.lower() != trigger_norm
+            ]
             cleaned.insert(0, trigger)
 
         if not cleaned:
