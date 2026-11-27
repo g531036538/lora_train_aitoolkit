@@ -49,6 +49,18 @@ CASES: dict[str, CaptionContext] = {
     "moss-text-layout-json": CaptionContext(
         target=TargetModel.MOSS, kind=DatasetKind.TEXT_LAYOUT, trigger=TRIGGER
     ),
+    "krea2-prose-pronoun": CaptionContext(
+        target=TargetModel.KREA2, kind=DatasetKind.CHARACTER, trigger=TRIGGER
+    ),
+    "krea2-prose-order": CaptionContext(
+        target=TargetModel.KREA2, kind=DatasetKind.CHARACTER, trigger=TRIGGER
+    ),
+    "krea2-style-outfit": CaptionContext(
+        target=TargetModel.KREA2, kind=DatasetKind.STYLE, trigger=TRIGGER
+    ),
+    "moss-text-layout-badjson": CaptionContext(
+        target=TargetModel.MOSS, kind=DatasetKind.TEXT_LAYOUT, trigger=TRIGGER
+    ),
 }
 
 
@@ -94,8 +106,8 @@ def test_golden_cases_match_file_names_and_cover_required_targets() -> None:
         assert ctx.target is expected_target, f"{name} 的目标是 {ctx.target}，文件名却写的是 {prefix}"
         assert ctx.trigger == TRIGGER, f"{name} 的触发词应统一为 {TRIGGER!r}"
     covered = {ctx.target for ctx in CASES.values()}
-    # Krea2 的 prose 输出正在改（PR B），它的用例先不钉；SDXL 与 MOSS 必须有。
-    required_targets = {TargetModel.SDXL, TargetModel.MOSS}
+    # 三个目标各至少一组；Krea2 的 prose 改完已重新钉住（PR B）。
+    required_targets = {TargetModel.SDXL, TargetModel.KREA2, TargetModel.MOSS}
     missing = required_targets - covered
     assert not missing, f"还有目标模型没有黄金用例：{sorted(missing)}"
 

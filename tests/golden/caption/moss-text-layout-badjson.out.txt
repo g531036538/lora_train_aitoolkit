@@ -1,0 +1,5 @@
+Object: sks_person, a red poster
+In-image text:
+"SALE" (role: header)
+Appearance: soft lighting
+Composition: yellow background

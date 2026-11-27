@@ -204,7 +204,8 @@ def test_get_backend_reports_missing_weights(model_dir: Path, monkeypatch):
     from loraforge.caption.pipeline import get_backend
 
     monkeypatch.setattr(wd_tagger, "ort", object())
-    with pytest.raises(RuntimeError, match="model_weights_missing"):
+    # 异常信息走 human_reason：给用户可执行的路径提示，不再是裸前缀。
+    with pytest.raises(RuntimeError, match="LORAFORGE_WD_MODEL_DIR"):
         get_backend("wd_tagger")
 
 

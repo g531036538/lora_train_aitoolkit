@@ -83,6 +83,12 @@ def test_is_valid_reason_rejects_unknown_or_empty_prefixes(reason: str) -> None:
     assert not is_valid_reason(reason)
 
 
+def test_human_reason_explains_missing_weights() -> None:
+    assert human_reason("model_weights_missing") == (
+        "缺少模型权重：把 LORAFORGE_WD_MODEL_DIR 指到含 model.onnx + selected_tags.csv 的目录"
+    )
+
+
 def test_human_reason_strips_prefix_for_developers() -> None:
     assert human_reason("requires_credentials:未配置 LORAFORGE_VLM_URL") == (
         "未配置 LORAFORGE_VLM_URL"

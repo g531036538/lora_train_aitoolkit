@@ -78,6 +78,16 @@ def test_ok_has_info_severity_and_tag_count() -> None:
     assert "4 个标签" in result.message
 
 
+def test_ok_tag_count_uses_deduplicated_tags() -> None:
+    """40 个 Tag_A + 40 个 tag_a 去重后只有 2 个，不该报「81 个标签」。"""
+    text = "my_tok, " + ", ".join(["Tag_A"] * 40) + ", " + ", ".join(["tag_a"] * 40)
+    result = check_captions([(Path("a.png"), text)], ctx())[0]
+    assert result.code == "ok"
+    assert "2 个标签" in result.message
+    assert "重复标签已按一次计" in result.message
+    assert "（81 个标签" not in result.message
+
+
 def test_identical_captions_are_warned_on_every_image() -> None:
     text = "my_tok, 1girl, solo, red dress"
     results = check_captions(

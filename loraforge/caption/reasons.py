@@ -57,6 +57,8 @@ def human_reason(reason: str) -> str:
     prefix, detail = parse_reason(reason)
     if prefix == "missing_dependency:httpx":
         return "缺少 httpx；无法调用 OpenAI 兼容端点"
+    if prefix == "model_weights_missing":
+        return "缺少模型权重：把 LORAFORGE_WD_MODEL_DIR 指到含 model.onnx + selected_tags.csv 的目录"
     if prefix == _MISSING_DEPENDENCY:
         return detail or "缺少依赖"
     if prefix.startswith(f"{_MISSING_DEPENDENCY}:"):
