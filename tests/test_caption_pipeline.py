@@ -142,13 +142,25 @@ def test_batch_report_ok_property() -> None:
 def test_list_backends_includes_unavailable_with_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LORAFORGE_VLM_URL", raising=False)
     monkeypatch.delenv("LORAFORGE_VLM_MODEL", raising=False)
+    monkeypatch.delenv("LORAFORGE_ENABLE_FAKE", raising=False)
     infos = {info.key: info for info in list_backends()}
-    assert infos["fake"].available
-    assert infos["fake"].reason == "ok"
+    assert "fake" not in infos
     http = infos["openai-http"]
     assert not http.available
     assert http.reason.startswith("requires_credentials:")
     assert "LORAFORGE_VLM_URL" in http.reason
+
+
+def test_list_backends_fake_only_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LORAFORGE_ENABLE_FAKE", raising=False)
+    assert "fake" not in {info.key for info in list_backends()}
+
+    monkeypatch.setenv("LORAFORGE_ENABLE_FAKE", "1")
+    infos = {info.key: info for info in list_backends()}
+    fake = infos["fake"]
+    assert fake.available
+    assert fake.reason == "ok"
+    assert "测试用" in fake.label
 
 
 def test_list_backends_http_available_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,6 +169,7 @@ def test_list_backends_http_available_when_configured(monkeypatch: pytest.Monkey
     infos = {info.key: info for info in list_backends()}
     assert infos["openai-http"].available
     assert infos["openai-http"].reason == "ok"
+    assert infos["openai-http"].caps.supports_tags is True
 
 
 def test_get_backend_fake_and_unknown() -> None:

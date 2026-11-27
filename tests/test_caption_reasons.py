@@ -17,6 +17,7 @@ from loraforge.caption.reasons import (
 def test_list_backends_reasons_use_known_prefixes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(openai_http.ENV_URL, raising=False)
     monkeypatch.delenv(openai_http.ENV_MODEL, raising=False)
+    monkeypatch.setenv("LORAFORGE_ENABLE_FAKE", "1")
 
     infos = {info.key: info for info in list_backends()}
     assert infos["fake"].reason == "ok"

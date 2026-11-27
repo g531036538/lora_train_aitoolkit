@@ -40,7 +40,7 @@ DEPENDENCY_ERROR = "" if httpx is not None else "缺少 httpx；无法调用 Ope
 
 CAPS = BackendCaps(
     needs_gpu=False,
-    supports_tags=False,
+    supports_tags=True,
     supports_prose=True,
     languages=("en", "zh"),
 )
@@ -74,12 +74,13 @@ def availability() -> tuple[bool, str]:
 
 
 def _prompt(ctx: CaptionContext) -> str:
-    if ctx.target == TargetModel.SDXL:
+    want_tags = ctx.target == TargetModel.SDXL or bool((ctx.extra or {}).get("want_tags"))
+    if want_tags:
         return (
             "Caption this image for SDXL LoRA training. Reply with a comma-separated list of "
             "lowercase Danbooru-style tags, most important first. Use canonical tags "
             "(1girl, solo, long hair, school uniform, outdoors, sunlight, ...). "
-            "Do not write a sentence. Do not add quality tags like masterpiece or 8k."
+            "Do not write a sentence. Do not explain. Do not add quality tags like masterpiece or 8k."
         )
 
     if ctx.target == TargetModel.MOSS and ctx.kind == DatasetKind.TEXT_LAYOUT:

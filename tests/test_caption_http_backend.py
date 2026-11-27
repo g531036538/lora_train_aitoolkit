@@ -11,6 +11,7 @@ import pytest
 from loraforge.caption.backends import openai_http
 from loraforge.caption.backends.openai_http import OpenAIVisionBackend
 from loraforge.caption.base import CaptionContext
+from loraforge.caption.stylers import SdxlTagsStyler
 from loraforge.models import DatasetKind, TargetModel
 
 
@@ -251,6 +252,8 @@ def test_prompt_for_sdxl_asks_for_tags(image: Path) -> None:
 
     backend(handler).caption(image, ctx(TargetModel.SDXL))
     assert "Danbooru-style tags" in seen["prompt"]
+    assert "Do not write a sentence" in seen["prompt"]
+    assert "Do not explain" in seen["prompt"]
 
 
 def test_prompt_for_krea2_asks_for_prose(image: Path) -> None:
@@ -262,6 +265,34 @@ def test_prompt_for_krea2_asks_for_prose(image: Path) -> None:
 
     backend(handler).caption(image, ctx(TargetModel.KREA2))
     assert "one natural-language sentence" in seen["prompt"]
+
+
+def test_want_tags_forces_tag_prompt_for_krea2(image: Path) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["prompt"] = json.loads(request.content)["messages"][1]["content"][0]["text"]
+        return ok_response("my_tok, 1girl")(request)
+
+    context = CaptionContext(
+        target=TargetModel.KREA2,
+        kind=DatasetKind.CHARACTER,
+        trigger="my_tok",
+        extra={"want_tags": True},
+    )
+    backend(handler).caption(image, context)
+    assert "Danbooru-style tags" in seen["prompt"]
+    assert "one natural-language sentence" not in seen["prompt"]
+
+
+def test_sdxl_sentence_response_is_cleaned_by_styler(image: Path) -> None:
+    sentence = (
+        "This is a photo of a woman. She is wearing a red dress. "
+        "She is standing in a park."
+    )
+    raw = backend(ok_response(sentence)).caption(image, ctx(TargetModel.SDXL))
+    rendered = SdxlTagsStyler().render(raw, ctx(TargetModel.SDXL))
+    assert rendered == "my_tok, 1girl, red dress, park"
 
 
 def test_prompt_for_moss_text_layout_asks_for_json_bbox(image: Path) -> None:
@@ -277,9 +308,9 @@ def test_prompt_for_moss_text_layout_asks_for_json_bbox(image: Path) -> None:
     assert "multiple of 16" in seen["prompt"]
 
 
-def test_caps_are_prose_only_and_cpu() -> None:
+def test_caps_support_tags_and_prose_and_cpu() -> None:
     caps = backend(ok_response("my_tok")).caps()
     assert caps.needs_gpu is False
-    assert caps.supports_tags is False
+    assert caps.supports_tags is True
     assert caps.supports_prose is True
     assert "en" in caps.languages and "zh" in caps.languages
