@@ -83,3 +83,46 @@ def test_example_is_readable_by_ai_toolkit(filename: str) -> None:
     assert process["model"]["name_or_path"] == expected["model"]
     assert process["model"]["arch"] == expected["arch"]
     assert process["network"]["type"] == expected["network"]
+
+# 第二个层次：光「读得出来」还不够，得能分派到真正的 process 类。
+# `get_job()` 在这台机器上被无关扩展链卡住（见 Issue #47），所以这里只走
+# 「configuration -> BaseJob -> sd_trainer 扩展 -> SDTrainer 类实例化」这一段：
+# 用的还是上游自己的类，没有 mock，也没有改它的源码。
+EXPECTED_PROCESS = {
+    "sdxl.yaml": ("sd_trainer", "extensions_built_in.sd_trainer.SDTrainer.SDTrainer", "sdxl"),
+    "krea2.yaml": ("sd_trainer", "extensions_built_in.sd_trainer.SDTrainer.SDTrainer", "krea2"),
+    "moss_image.yaml": ("sd_trainer", "extensions_built_in.sd_trainer.SDTrainer.SDTrainer", "moss_image"),
+}
+
+
+def _load_dispatch():
+    """拿到 get_config / BaseJob / get_all_extensions；拿不到就 skip 并说原因。"""
+    get_config = _load_get_config()
+    try:
+        from jobs import BaseJob  # noqa: PLC0415
+        from toolkit.extension import get_all_extensions  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001 - 缺包就 skip
+        pytest.skip(f"ai-toolkit 依赖不全：{type(exc).__name__}: {exc}")
+    return get_config, BaseJob, get_all_extensions
+
+
+@pytest.mark.parametrize("filename", sorted(EXPECTED_PROCESS))
+def test_example_dispatches_to_real_process_class(filename: str, scratch: pathlib.Path) -> None:
+    get_config, BaseJob, get_all_extensions = _load_dispatch()
+    cfg = get_config(str(EXAMPLES / filename))
+    proc_cfg = cfg["config"]["process"][0]
+    proc_cfg["training_folder"] = str(scratch / "training")
+
+    uid, class_name, arch = EXPECTED_PROCESS[filename]
+    assert proc_cfg["type"] == uid
+
+    extension = {item.uid: item for item in get_all_extensions()}[uid]
+    process_class = extension.get_process()
+    assert f"{process_class.__module__}.{process_class.__name__}" == class_name
+
+    job = BaseJob(cfg)
+    process = process_class(0, job, proc_cfg)
+    assert type(process) is process_class
+    assert process.model_config.arch == arch
+    assert process.network_config.type == "lora"
+
