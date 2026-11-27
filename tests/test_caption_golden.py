@@ -61,6 +61,12 @@ CASES: dict[str, CaptionContext] = {
     "moss-text-layout-badjson": CaptionContext(
         target=TargetModel.MOSS, kind=DatasetKind.TEXT_LAYOUT, trigger=TRIGGER
     ),
+    "krea2-identity-underscore": CaptionContext(
+        target=TargetModel.KREA2, kind=DatasetKind.CHARACTER, trigger=TRIGGER
+    ),
+    "krea2-body-vs-composition": CaptionContext(
+        target=TargetModel.KREA2, kind=DatasetKind.CHARACTER, trigger=TRIGGER
+    ),
 }
 
 

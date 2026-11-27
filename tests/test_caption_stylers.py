@@ -105,6 +105,27 @@ def test_krea2_only_identity_raises() -> None:
         Krea2ProseStyler().render("long black hair, blue eyes, pale skin", ctx(TargetModel.KREA2))
 
 
+def test_krea2_strips_identity_in_underscore_form() -> None:
+    """下划线写法（Danbooru 形状）同样算身份，不能被漏进 .txt。"""
+    raw = "long_hair, blue_eyes, pale_skin, red coat, rain"
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="sks_person"))
+    assert out == "sks_person, red coat, rain."
+
+
+def test_krea2_keeps_composition_words() -> None:
+    """full body 里的 body 是构图，不是身份：整句必须保留。"""
+    raw = "full body, long hair, red dress"
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="sks_person"))
+    assert out == "sks_person, full body, red dress."
+
+
+def test_krea2_keeps_count_and_crowd_tags() -> None:
+    """1girl / solo / mature female 描述构图与人群，换装时不该漂，保留。"""
+    raw = "1girl, solo, mature female, red dress"
+    out = Krea2ProseStyler().render(raw, ctx(TargetModel.KREA2, trigger="sks_person"))
+    assert out == "sks_person, 1girl, solo, mature female, red dress."
+
+
 def test_krea2_empty_raises() -> None:
     with pytest.raises(ValueError):
         Krea2ProseStyler().render("   ", ctx(TargetModel.KREA2))
